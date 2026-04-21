@@ -22,7 +22,7 @@ from ui_questionnaires import render_staff_questionnaires, render_player_questio
 
 st.set_page_config(
     page_title="Club — Séances & Questionnaires",
-    page_icon="⚽",
+    page_icon="https://upload.wikimedia.org/wikipedia/fr/7/72/AS_Cannes_foot_Logo_2017.svg",
     layout="wide",
 )
 
