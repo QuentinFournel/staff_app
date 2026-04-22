@@ -3,9 +3,7 @@ ui_sessions.py
 --------------
 Interfaces Streamlit pour la partie "Séances".
 
-Logique : plus de menu déroulant de choix de séance.
-On clique directement sur un événement dans le calendrier pour afficher
-ses détails / sa gestion en dessous.
+Logique : on clique sur un événement du calendrier pour afficher ses détails.
 """
 
 from __future__ import annotations
@@ -19,10 +17,6 @@ from streamlit_calendar import calendar
 
 import database as db
 
-
-# ---------------------------------------------------------------------------
-# Helpers visuels
-# ---------------------------------------------------------------------------
 
 COULEUR_J = {
     "J":    "#2E7D32",
@@ -82,7 +76,6 @@ def _session_to_event(s: dict) -> dict:
 
 
 def _handle_calendar_click(cal_result, state_key: str) -> None:
-    """Si le dernier callback est un clic sur un event, mémorise son id."""
     if not cal_result:
         return
     cb = cal_result.get("callback")
@@ -209,10 +202,7 @@ def _staff_calendar_and_details() -> None:
         return
 
     events = [_session_to_event(s) for s in sessions]
-
-    st.caption(
-        "Clique sur une séance dans le calendrier pour afficher et gérer ses détails en dessous."
-    )
+    st.caption("Clique sur une séance dans le calendrier pour afficher et gérer ses détails en dessous.")
 
     cal_result = calendar(
         events=events,
@@ -254,7 +244,6 @@ def _staff_session_editor(session: dict) -> None:
         ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "🗑️ Supprimer"]
     )
 
-    # --- Infos & procédés ---
     with tab_info:
         with st.form(f"edit_session_{session_id}"):
             col1, col2 = st.columns(2)
@@ -308,7 +297,6 @@ def _staff_session_editor(session: dict) -> None:
                 time.sleep(0.8)
                 st.rerun()
 
-    # --- Convocations ---
     with tab_conv:
         players = db.list_players()
         current_convs = db.list_convocations(session_id)
@@ -352,7 +340,6 @@ def _staff_session_editor(session: dict) -> None:
                         db.update_convocation_status(c["id"], new_status)
                         st.rerun()
 
-    # --- PDF ---
     with tab_pdf:
         pdfs = db.list_pdfs(session_id)
         if pdfs:
@@ -391,7 +378,6 @@ def _staff_session_editor(session: dict) -> None:
                 else:
                     st.warning("Sélectionne un PDF avant de cliquer.")
 
-    # --- Supprimer ---
     with tab_danger:
         st.warning(
             "La suppression est définitive : convocations, PDF et questionnaire "
@@ -429,7 +415,6 @@ def render_player_sessions() -> None:
         return
 
     events = [_session_to_event(s) for s in sessions]
-
     st.caption("Clique sur une séance pour afficher ses détails.")
 
     cal_result = calendar(

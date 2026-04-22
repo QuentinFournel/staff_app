@@ -3,17 +3,9 @@ database.py
 -----------
 Couche d'accès SQLite pour l'application Club — Séances & Questionnaires.
 
-Les utilisateurs sont définis dans les secrets Streamlit (pas de mot de passe
-stocké ici). La table `users` sert uniquement à relier un joueur aux
-convocations, séances et questionnaires via un `user_id` stable.
-
-Tables :
-    users, sessions, procedes, convocations, pdfs,
-    questionnaires, questions, responses
-
 Migration automatique au démarrage (init_db) : si une DB existe avec une
-version plus ancienne du schéma (par ex. sans la colonne `j_relative`),
-les colonnes manquantes sont ajoutées via ALTER TABLE.
+version plus ancienne du schéma, les colonnes manquantes sont ajoutées
+via ALTER TABLE pour chaque table.
 """
 
 from __future__ import annotations
@@ -53,23 +45,72 @@ def get_conn():
 
 
 # ---------------------------------------------------------------------------
-# Migration légère : ajoute une colonne si elle manque
+# Migration légère : ajoute les colonnes manquantes d'une table
 # ---------------------------------------------------------------------------
-
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    """Ajoute `column` à `table` si elle manque. Utile pour migrer une DB
-    créée avec une version plus ancienne du schéma."""
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    existing = {r["name"] for r in rows}
-    if column not in existing:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
     return row is not None
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Ajoute `column` à `table` si elle manque."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {r["name"] for r in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+# Colonnes attendues pour chaque table (hors PK autoincrement).
+# On utilise systématiquement des DEFAULT car SQLite interdit l'ajout d'une
+# colonne NOT NULL sans DEFAULT via ALTER TABLE.
+EXPECTED_COLUMNS = {
+    "users": [
+        ("username",  "TEXT NOT NULL DEFAULT ''"),
+        ("role",      "TEXT NOT NULL DEFAULT 'joueur'"),
+        ("full_name", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "sessions": [
+        ("title",       "TEXT NOT NULL DEFAULT ''"),
+        ("description", "TEXT"),
+        ("j_relative",  "TEXT"),
+        ("date",        "TEXT NOT NULL DEFAULT ''"),
+        ("time",        "TEXT NOT NULL DEFAULT ''"),
+        ("created_by",  "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "procedes": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("label",      "TEXT NOT NULL DEFAULT ''"),
+        ("duration",   "INTEGER NOT NULL DEFAULT 0"),
+        ("ordre",      "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "convocations": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("player_id",  "INTEGER NOT NULL DEFAULT 0"),
+        ("status",     "TEXT NOT NULL DEFAULT 'convoque'"),
+    ],
+    "pdfs": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("filename",   "TEXT NOT NULL DEFAULT ''"),
+        ("path",       "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "questionnaires": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("title",      "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "questions": [
+        ("questionnaire_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("text",             "TEXT NOT NULL DEFAULT ''"),
+        ("ordre",            "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "responses": [
+        ("question_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("player_id",   "INTEGER NOT NULL DEFAULT 0"),
+        ("value",       "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -145,10 +186,12 @@ def init_db() -> None:
             """
         )
 
-        # Migrations : colonnes qui n'existaient pas dans les versions antérieures
-        if _table_exists(conn, "sessions"):
-            _ensure_column(conn, "sessions", "description", "TEXT")
-            _ensure_column(conn, "sessions", "j_relative", "TEXT")
+        # --- Migrations : ajoute les colonnes manquantes sur chaque table ---
+        for table, cols in EXPECTED_COLUMNS.items():
+            if not _table_exists(conn, table):
+                continue
+            for col_name, col_ddl in cols:
+                _ensure_column(conn, table, col_name, col_ddl)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +199,6 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 def upsert_user(username: str, role: str, full_name: str) -> int:
-    """Crée ou met à jour un utilisateur à partir des secrets. Retourne son id."""
     with get_conn() as conn:
         c = conn.cursor()
         c.execute(
@@ -174,7 +216,6 @@ def upsert_user(username: str, role: str, full_name: str) -> int:
 
 
 def sync_users_from_secrets(users_dict: dict) -> None:
-    """Synchronise la table users avec le contenu des secrets Streamlit."""
     for username, data in users_dict.items():
         upsert_user(
             username=str(username).lower().strip(),
@@ -258,7 +299,6 @@ def update_session(
 
 
 def delete_session(session_id: int) -> None:
-    # On purge les PDF sur disque avant suppression en cascade.
     for pdf in list_pdfs(session_id):
         try:
             os.remove(pdf["path"])
@@ -313,7 +353,6 @@ def list_sessions_for_player(player_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def convoquer_joueurs(session_id: int, player_ids: Iterable[int]) -> None:
-    """Remplace la liste des convocations par celle fournie."""
     ids = list(player_ids)
     with get_conn() as conn:
         c = conn.cursor()
@@ -439,7 +478,6 @@ def list_questions(questionnaire_id: int) -> list[dict]:
 
 
 def save_responses(player_id: int, answers: dict[int, int]) -> None:
-    """`answers` : {question_id: value}. Upsert pour permettre la modif."""
     with get_conn() as conn:
         c = conn.cursor()
         for qid, val in answers.items():
