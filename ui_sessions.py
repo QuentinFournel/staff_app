@@ -1,16 +1,25 @@
 """
 ui_sessions.py
 --------------
-Interfaces Streamlit pour la partie "Calendrier / Gestion des séances".
+Interfaces Streamlit pour la partie "Séances".
 
-- Calendrier mensuel interactif (streamlit-calendar).
-- Ballons animés à la création d'une séance.
-- Ajout de PDF encapsulé dans un formulaire (évite la boucle d'ajout).
+NOUVELLE LOGIQUE : plus de menu déroulant de choix de séance.
+On clique directement sur un événement dans le calendrier pour afficher
+ses détails / sa gestion en dessous.
+
+- Calendrier mensuel (streamlit-calendar) avec couleur selon J-relative.
+- Clic sur un événement -> stocke l'id dans st.session_state et affiche
+  le bloc de détails en dessous.
+- Staff : création de séance dans un onglet séparé, puis gestion (édition,
+  convocations, PDF, suppression) via le clic sur le calendrier.
+- Joueur : consulte ses séances (convocations, détails, PDF) en cliquant sur
+  l'événement dans son calendrier.
 """
 
+from __future__ import annotations
+
 import time
-from datetime import date as date_type, time as time_type
-from pathlib import Path
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -19,388 +28,489 @@ from streamlit_calendar import calendar
 import database as db
 
 
-STATUTS = ["convoque", "present", "absent", "malade", "adapte"]
-STATUT_EMOJI = {
-    "convoque": "📩 Convoqué",
-    "present":  "✅ Présent",
-    "absent":   "❌ Absent",
-    "malade":   "🤒 Malade",
-    "adapte":   "🔄 Adapté",
-}
+# ---------------------------------------------------------------------------
+# Helpers visuels
+# ---------------------------------------------------------------------------
 
 COULEUR_J = {
-    "J-5": "#6c757d",
-    "J-4": "#17a2b8",
-    "J-3": "#007bff",
-    "J-2": "#28a745",
-    "J-1": "#fd7e14",
-    "J":   "#dc3545",
-    "J+1": "#6f42c1",
-    "J+2": "#20c997",
+    "J":    "#2E7D32",   # jour du match
+    "J-1":  "#66BB6A",
+    "J-2":  "#9CCC65",
+    "J-3":  "#FFEB3B",
+    "J-4":  "#FFA726",
+    "J-5":  "#EF5350",
+    "J+1":  "#42A5F5",
+    "J+2":  "#5C6BC0",
+    "Autre":"#90A4AE",
 }
 
 
-def _sessions_to_events(sessions) -> list[dict]:
-    events = []
-    for s in sessions:
-        start = f"{s['date']}T{s['time']}:00"
-        try:
-            h, m = map(int, s["time"].split(":"))
-            end_h = (h * 60 + m + 90) // 60
-            end_m = (h * 60 + m + 90) % 60
-            end = f"{s['date']}T{end_h:02d}:{end_m:02d}:00"
-        except Exception:
-            end = start
-        events.append({
-            "id": str(s["id"]),
-            "title": f"{s['day_relative'] or ''} · {s['title']}",
-            "start": start,
-            "end": end,
-            "backgroundColor": COULEUR_J.get(s["day_relative"], "#1f77b4"),
-            "borderColor":     COULEUR_J.get(s["day_relative"], "#1f77b4"),
-        })
-    return events
+CALENDAR_OPTIONS = {
+    "initialView": "dayGridMonth",
+    "locale": "fr",
+    "firstDay": 1,
+    "headerToolbar": {
+        "left":   "prev,next today",
+        "center": "title",
+        "right":  "dayGridMonth,timeGridWeek,listWeek",
+    },
+    "buttonText": {
+        "today": "Aujourd'hui",
+        "month": "Mois",
+        "week":  "Semaine",
+        "list":  "Liste",
+    },
+    "height": 650,
+    "navLinks": True,
+    "editable": False,
+    "selectable": False,
+    "eventDisplay": "block",
+}
 
 
-def _calendar_options() -> dict:
+CALENDAR_CSS = """
+.fc-event { cursor: pointer !important; }
+.fc-event:hover { opacity: 0.85; }
+"""
+
+
+def _session_to_event(s: dict) -> dict:
+    color = COULEUR_J.get(s.get("j_relative") or "Autre", COULEUR_J["Autre"])
+    start = f"{s['date']}T{s['time']}"
+    label = s["title"]
+    if s.get("j_relative"):
+        label = f"[{s['j_relative']}] {label}"
     return {
-        "editable": False,
-        "selectable": True,
-        "initialView": "dayGridMonth",
-        "locale": "fr",
-        "firstDay": 1,
-        "headerToolbar": {
-            "left":   "prev,next today",
-            "center": "title",
-            "right":  "dayGridMonth,timeGridWeek,listWeek",
-        },
-        "buttonText": {
-            "today":  "Aujourd'hui",
-            "month":  "Mois",
-            "week":   "Semaine",
-            "list":   "Liste",
-        },
-        "height": 650,
+        "id": str(s["id"]),
+        "title": label,
+        "start": start,
+        "backgroundColor": color,
+        "borderColor":     color,
     }
 
 
-def _get_selected_id_from_calendar_state(state) -> int | None:
-    if not state:
-        return None
-    ev = state.get("eventClick")
-    if ev and isinstance(ev, dict):
-        event = ev.get("event") or {}
-        if event.get("id"):
+def _handle_calendar_click(cal_result, state_key: str) -> None:
+    """
+    Si le dernier callback est un clic sur un event, mémorise son id dans
+    st.session_state[state_key] et rerun.
+    """
+    if not cal_result:
+        return
+    cb = cal_result.get("callback")
+    if cb == "eventClick":
+        event = cal_result.get("eventClick", {}).get("event", {})
+        event_id = event.get("id")
+        if event_id is not None:
             try:
-                return int(event["id"])
-            except ValueError:
-                return None
-    return None
+                sid = int(event_id)
+            except (TypeError, ValueError):
+                return
+            if st.session_state.get(state_key) != sid:
+                st.session_state[state_key] = sid
+                st.rerun()
 
 
-# =============================================================================
+# ===========================================================================
 # VUE STAFF
-# =============================================================================
+# ===========================================================================
 
 def render_staff_sessions() -> None:
-    st.header("📅 Calendrier des séances (staff)")
+    st.header("📅 Séances (staff)")
 
-    tab_calendar, tab_create = st.tabs(["Calendrier", "➕ Créer une séance"])
+    tab_cal, tab_new = st.tabs(["Calendrier", "➕ Créer une séance"])
 
-    with tab_calendar:
-        _staff_calendar_view()
+    with tab_new:
+        _staff_create_session()
 
-    with tab_create:
-        _staff_create_session_form()
-
-
-def _staff_calendar_view() -> None:
-    sessions = db.list_sessions()
-    if not sessions:
-        st.info("Aucune séance enregistrée. Crée-en une via l'onglet ➕.")
-        return
-
-    events = _sessions_to_events(sessions)
-    state = calendar(
-        events=events,
-        options=_calendar_options(),
-        key="staff_calendar",
-    )
-    selected_id = _get_selected_id_from_calendar_state(state)
-
-    st.markdown("---")
-    st.subheader("Détails et gestion d'une séance")
-    options = {f"{s['date']} {s['time']} — {s['title']}": s["id"] for s in sessions}
-    default_idx = 0
-    if selected_id:
-        for i, sid in enumerate(options.values()):
-            if sid == selected_id:
-                default_idx = i
-                break
-    choix = st.selectbox(
-        "Choisir une séance",
-        list(options.keys()),
-        index=default_idx,
-        key="staff_select_session",
-    )
-    _staff_session_detail(options[choix])
+    with tab_cal:
+        _staff_calendar_and_details()
 
 
-def _staff_session_detail(session_id: int) -> None:
-    session = db.get_session(session_id)
-    if not session:
-        st.warning("Séance introuvable.")
-        return
+# ---------------------------------------------------------------------------
+# Création d'une séance
+# ---------------------------------------------------------------------------
 
-    st.markdown(f"### {session['title']}")
-    st.caption(f"{session['date']} à {session['time']} — {session['day_relative'] or ''}")
-    if session["description"]:
-        st.write(session["description"])
-
-    procedes = db.list_procedes(session_id)
-    if procedes:
-        st.markdown("**Procédés / contenus**")
-        df_proc = pd.DataFrame([{
-            "Ordre": p["ordre"],
-            "Contenu": p["name"],
-            "Durée (min)": p["duration"],
-        } for p in procedes])
-        st.table(df_proc)
-    else:
-        st.info("Aucun procédé enregistré pour cette séance.")
-
-    with st.expander("➕ Ajouter un procédé"):
-        with st.form(f"add_proc_{session_id}"):
-            c1, c2, c3 = st.columns([3, 1, 1])
-            name = c1.text_input("Nom du procédé")
-            duration = c2.number_input("Durée (min)", min_value=1, value=15, step=1)
-            ordre = c3.number_input("Ordre", min_value=0, value=0, step=1)
-            if st.form_submit_button("Ajouter"):
-                if name.strip():
-                    db.add_procede(session_id, name.strip(), int(duration), int(ordre))
-                    st.success("Procédé ajouté.")
-                    st.rerun()
-                else:
-                    st.warning("Le nom est obligatoire.")
-
-    # --- PDF ---
-    st.markdown("**Documents PDF**")
-    pdfs = db.list_pdfs(session_id)
-    for pdf in pdfs:
-        fp = Path(pdf["filepath"])
-        if fp.exists():
-            with open(fp, "rb") as f:
-                st.download_button(
-                    f"📄 {pdf['filename']}",
-                    data=f.read(),
-                    file_name=pdf["filename"],
-                    mime="application/pdf",
-                    key=f"pdf_{pdf['id']}",
-                )
-
-    # Formulaire dédié pour l'ajout d'un PDF.
-    # clear_on_submit=True vide le file_uploader après l'ajout,
-    # ce qui évite que le PDF soit ré-enregistré à chaque rerun.
-    with st.form(f"pdf_form_{session_id}", clear_on_submit=True):
-        new_pdf = st.file_uploader("Joindre un PDF", type=["pdf"])
-        if st.form_submit_button("Ajouter le PDF"):
-            if new_pdf is not None:
-                db.add_pdf(session_id, new_pdf.name, new_pdf.read())
-                st.success("PDF ajouté.")
-                st.rerun()
-            else:
-                st.warning("Sélectionne un PDF avant de cliquer.")
-
-    st.markdown("**Convocations**")
-    _staff_convocations_block(session_id)
-
-    with st.expander("⚠️ Supprimer la séance"):
-        if st.button("Supprimer définitivement", key=f"del_{session_id}"):
-            db.delete_session(session_id)
-            st.success("Séance supprimée.")
-            st.rerun()
-
-
-def _staff_convocations_block(session_id: int) -> None:
-    joueurs = db.list_players()
-    convocations = db.list_convocations(session_id)
-    deja_convoques = {c["player_id"] for c in convocations}
-
-    candidats = [j for j in joueurs if j["id"] not in deja_convoques]
-    if candidats:
-        with st.form(f"convoc_form_{session_id}"):
-            noms = st.multiselect(
-                "Convoquer des joueurs",
-                options=[j["full_name"] for j in candidats],
-            )
-            if st.form_submit_button("Convoquer"):
-                ids = [j["id"] for j in candidats if j["full_name"] in noms]
-                if ids:
-                    db.convoquer_joueurs(session_id, ids)
-                    st.success(f"{len(ids)} joueur(s) convoqué(s).")
-                    st.rerun()
-
-    if convocations:
-        st.caption("Statut de chaque joueur convoqué :")
-        for c in convocations:
-            cols = st.columns([3, 2])
-            cols[0].write(f"👤 {c['full_name']}")
-            new_status = cols[1].selectbox(
-                "Statut",
-                options=STATUTS,
-                index=STATUTS.index(c["status"]) if c["status"] in STATUTS else 0,
-                format_func=lambda s: STATUT_EMOJI[s],
-                key=f"status_{session_id}_{c['player_id']}",
-                label_visibility="collapsed",
-            )
-            if new_status != c["status"]:
-                db.update_status(session_id, c["player_id"], new_status)
-                st.toast(f"Statut mis à jour pour {c['full_name']}", icon="✅")
-    else:
-        st.info("Aucun joueur convoqué pour cette séance.")
-
-
-def _staff_create_session_form() -> None:
+def _staff_create_session() -> None:
     user = st.session_state["user"]
 
     with st.form("create_session", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        title = c1.text_input("Titre de la séance")
-        day_relative = c2.selectbox(
-            "Jour relatif au match",
-            ["J-5", "J-4", "J-3", "J-2", "J-1", "J", "J+1", "J+2"],
-            index=4,
-        )
-        c3, c4 = st.columns(2)
-        session_date = c3.date_input("Date", value=date_type.today())
-        session_time = c4.time_input("Heure", value=time_type(10, 0))
-        description = st.text_area("Description")
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("Titre", placeholder="Séance tactique")
+            date_val = st.date_input("Date", value=date.today())
+            j_rel = st.selectbox(
+                "Jour relatif au match",
+                list(COULEUR_J.keys()),
+                index=list(COULEUR_J.keys()).index("J-1"),
+            )
+        with col2:
+            time_val = st.time_input("Heure", value=datetime.now().time().replace(second=0, microsecond=0))
+            description = st.text_area("Description", height=104)
 
-        st.markdown("**Procédés de la séance**")
-        procedes_raw = st.data_editor(
-            pd.DataFrame([{"Contenu": "", "Durée (min)": 15}]),
+        st.markdown("**Procédés** (optionnel)")
+        default_df = pd.DataFrame(
+            [
+                {"Procédé": "Échauffement", "Durée (min)": 15},
+                {"Procédé": "Possession 4v4+3", "Durée (min)": 20},
+                {"Procédé": "Match à thème", "Durée (min)": 25},
+            ]
+        )
+        df_proc = st.data_editor(
+            default_df,
             num_rows="dynamic",
             use_container_width=True,
-            key="proc_editor",
+            key="procedes_editor_create",
         )
 
-        st.markdown("**Joueurs à convoquer**")
-        joueurs = db.list_players()
-        noms_selectionnes = st.multiselect(
-            "Sélectionne les joueurs",
-            options=[j["full_name"] for j in joueurs],
+        st.markdown("**Convocations**")
+        players = db.list_players()
+        player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
+        selected_labels = st.multiselect(
+            "Joueurs convoqués",
+            list(player_labels.keys()),
+            default=list(player_labels.keys()),
         )
-
-        pdf_file = st.file_uploader("Joindre un PDF (optionnel)", type=["pdf"])
 
         submitted = st.form_submit_button("Créer la séance")
 
-    if submitted:
-        if not title.strip():
-            st.error("Le titre est obligatoire.")
-            return
+    if not submitted:
+        return
 
-        session_id = db.create_session(
-            title=title.strip(),
-            description=description.strip(),
-            day_relative=day_relative,
-            date=session_date.isoformat(),
-            time=session_time.strftime("%H:%M"),
-            created_by=user["id"],
-        )
+    if not title.strip():
+        st.error("Le titre est obligatoire.")
+        return
 
-        for ordre, row in enumerate(procedes_raw.itertuples(index=False), start=1):
-            contenu = str(row[0]).strip() if row[0] else ""
-            duree = int(row[1]) if row[1] else 0
-            if contenu and duree > 0:
-                db.add_procede(session_id, contenu, duree, ordre)
+    procedes = [
+        (str(row["Procédé"]).strip(), int(row["Durée (min)"] or 0))
+        for _, row in df_proc.iterrows()
+        if str(row.get("Procédé", "")).strip()
+    ]
+    session_id = db.create_session(
+        title=title.strip(),
+        description=description.strip(),
+        j_relative=j_rel,
+        date=date_val.isoformat(),
+        time=time_val.strftime("%H:%M"),
+        created_by=user["id"],
+        procedes=procedes,
+    )
+    db.convoquer_joueurs(session_id, [player_labels[l] for l in selected_labels])
 
-        ids = [j["id"] for j in joueurs if j["full_name"] in noms_selectionnes]
-        if ids:
-            db.convoquer_joueurs(session_id, ids)
+    st.success(f"Séance « {title} » créée ✅")
+    st.balloons()
+    time.sleep(1.8)
+    # Pré-sélectionne la nouvelle séance dans le calendrier
+    st.session_state["staff_selected_session"] = session_id
+    st.rerun()
 
-        if pdf_file is not None:
-            db.add_pdf(session_id, pdf_file.name, pdf_file.read())
 
-        st.success("Séance créée avec succès ✅")
-        st.balloons()
-        time.sleep(1.8)
+# ---------------------------------------------------------------------------
+# Calendrier + bloc de détails (zone unique, pilotée par le clic)
+# ---------------------------------------------------------------------------
+
+def _staff_calendar_and_details() -> None:
+    sessions = db.list_sessions()
+
+    if not sessions:
+        st.info("Aucune séance pour le moment. Crée-en une via l'onglet « ➕ Créer une séance ».")
+        # On efface une éventuelle sélection persistée.
+        st.session_state.pop("staff_selected_session", None)
+        return
+
+    events = [_session_to_event(s) for s in sessions]
+
+    st.caption(
+        "Clique sur une séance dans le calendrier pour afficher et gérer ses détails en dessous."
+    )
+
+    cal_result = calendar(
+        events=events,
+        options=CALENDAR_OPTIONS,
+        custom_css=CALENDAR_CSS,
+        key="cal_staff",
+    )
+    _handle_calendar_click(cal_result, "staff_selected_session")
+
+    selected_id = st.session_state.get("staff_selected_session")
+    if selected_id is None:
+        st.info("👉 Sélectionne une séance dans le calendrier pour voir ses détails.")
+        _legend()
+        return
+
+    session = db.get_session(selected_id)
+    if session is None:
+        # La séance a été supprimée -> on nettoie.
+        st.session_state.pop("staff_selected_session", None)
         st.rerun()
+        return
+
+    st.markdown("---")
+    header_cols = st.columns([6, 1])
+    with header_cols[0]:
+        st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
+    with header_cols[1]:
+        if st.button("✖ Fermer", key="close_details", use_container_width=True):
+            st.session_state.pop("staff_selected_session", None)
+            st.rerun()
+
+    _staff_session_editor(session)
+    _legend()
 
 
-# =============================================================================
+def _legend() -> None:
+    with st.expander("🎨 Légende des couleurs par jour relatif"):
+        parts = [
+            f"<span style='background:{color};padding:2px 8px;border-radius:4px;color:white;margin-right:6px;'>{key}</span>"
+            for key, color in COULEUR_J.items()
+        ]
+        st.markdown(" ".join(parts), unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Bloc détail / gestion d'UNE séance (staff)
+# ---------------------------------------------------------------------------
+
+def _staff_session_editor(session: dict) -> None:
+    session_id = session["id"]
+
+    tab_info, tab_conv, tab_pdf, tab_danger = st.tabs(
+        ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "🗑️ Supprimer"]
+    )
+
+    # --- Infos & procédés -----------------------------------------------------
+    with tab_info:
+        with st.form(f"edit_session_{session_id}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                title = st.text_input("Titre", value=session["title"])
+                date_val = st.date_input(
+                    "Date", value=datetime.fromisoformat(session["date"]).date()
+                )
+                j_keys = list(COULEUR_J.keys())
+                cur_j = session.get("j_relative") or "Autre"
+                j_rel = st.selectbox(
+                    "Jour relatif",
+                    j_keys,
+                    index=j_keys.index(cur_j) if cur_j in j_keys else j_keys.index("Autre"),
+                )
+            with col2:
+                t_obj = datetime.strptime(session["time"], "%H:%M").time()
+                time_val = st.time_input("Heure", value=t_obj)
+                description = st.text_area(
+                    "Description", value=session.get("description") or "", height=104
+                )
+
+            procedes_cur = db.list_procedes(session_id)
+            df_proc = pd.DataFrame(
+                [{"Procédé": p["label"], "Durée (min)": p["duration"]} for p in procedes_cur]
+                or [{"Procédé": "", "Durée (min)": 0}]
+            )
+            df_edit = st.data_editor(
+                df_proc,
+                num_rows="dynamic",
+                use_container_width=True,
+                key=f"procedes_editor_edit_{session_id}",
+            )
+
+            if st.form_submit_button("Enregistrer les modifications"):
+                procedes = [
+                    (str(row["Procédé"]).strip(), int(row["Durée (min)"] or 0))
+                    for _, row in df_edit.iterrows()
+                    if str(row.get("Procédé", "")).strip()
+                ]
+                db.update_session(
+                    session_id=session_id,
+                    title=title.strip() or session["title"],
+                    description=description.strip(),
+                    j_relative=j_rel,
+                    date=date_val.isoformat(),
+                    time=time_val.strftime("%H:%M"),
+                    procedes=procedes,
+                )
+                st.success("Séance mise à jour ✅")
+                time.sleep(0.8)
+                st.rerun()
+
+    # --- Convocations ---------------------------------------------------------
+    with tab_conv:
+        players = db.list_players()
+        current_convs = db.list_convocations(session_id)
+        current_ids = {c["player_id"] for c in current_convs}
+
+        st.markdown("**Liste des joueurs convoqués**")
+        player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
+        default_labels = [l for l, pid in player_labels.items() if pid in current_ids]
+
+        with st.form(f"conv_form_{session_id}"):
+            new_selection = st.multiselect(
+                "Joueurs convoqués",
+                list(player_labels.keys()),
+                default=default_labels,
+            )
+            if st.form_submit_button("Mettre à jour les convocations"):
+                db.convoquer_joueurs(session_id, [player_labels[l] for l in new_selection])
+                st.success("Convocations mises à jour ✅")
+                time.sleep(0.6)
+                st.rerun()
+
+        st.markdown("**Statuts**")
+        convs = db.list_convocations(session_id)
+        if not convs:
+            st.info("Aucun joueur convoqué.")
+        else:
+            status_options = ["convoque", "present", "absent", "malade", "adapte"]
+            for c in convs:
+                cols = st.columns([4, 3])
+                with cols[0]:
+                    st.markdown(f"**{c['full_name']}** _({c['username']})_")
+                with cols[1]:
+                    new_status = st.selectbox(
+                        "Statut",
+                        status_options,
+                        index=status_options.index(c["status"]),
+                        key=f"status_{c['id']}",
+                        label_visibility="collapsed",
+                    )
+                    if new_status != c["status"]:
+                        db.update_convocation_status(c["id"], new_status)
+                        st.rerun()
+
+    # --- PDF ------------------------------------------------------------------
+    with tab_pdf:
+        pdfs = db.list_pdfs(session_id)
+        if pdfs:
+            st.markdown("**Documents joints :**")
+            for p in pdfs:
+                cols = st.columns([5, 1])
+                with cols[0]:
+                    try:
+                        with open(p["path"], "rb") as f:
+                            st.download_button(
+                                label=f"📄 {p['filename']}",
+                                data=f.read(),
+                                file_name=p["filename"],
+                                mime="application/pdf",
+                                key=f"dl_{p['id']}",
+                                use_container_width=True,
+                            )
+                    except FileNotFoundError:
+                        st.warning(f"Fichier manquant : {p['filename']}")
+                with cols[1]:
+                    if st.button("🗑️", key=f"del_pdf_{p['id']}", use_container_width=True):
+                        db.delete_pdf(p["id"])
+                        st.rerun()
+        else:
+            st.caption("Aucun PDF pour le moment.")
+
+        # Upload dans un form pour éviter la boucle d'ajout automatique
+        with st.form(f"pdf_form_{session_id}", clear_on_submit=True):
+            new_pdf = st.file_uploader("Joindre un PDF", type=["pdf"])
+            submitted_pdf = st.form_submit_button("Ajouter le PDF")
+            if submitted_pdf:
+                if new_pdf is not None:
+                    db.add_pdf(session_id, new_pdf.name, new_pdf.read())
+                    st.success("PDF ajouté ✅")
+                    time.sleep(0.6)
+                    st.rerun()
+                else:
+                    st.warning("Sélectionne un PDF avant de cliquer.")
+
+    # --- Supprimer ------------------------------------------------------------
+    with tab_danger:
+        st.warning(
+            "La suppression est définitive : convocations, PDF et questionnaire "
+            "associés seront également supprimés."
+        )
+        confirm = st.checkbox("Je confirme vouloir supprimer cette séance", key=f"confirm_del_{session_id}")
+        if st.button("Supprimer la séance", type="primary", disabled=not confirm, key=f"btn_del_{session_id}"):
+            db.delete_session(session_id)
+            st.session_state.pop("staff_selected_session", None)
+            st.success("Séance supprimée.")
+            time.sleep(0.6)
+            st.rerun()
+
+
+# ===========================================================================
 # VUE JOUEUR
-# =============================================================================
+# ===========================================================================
 
 def render_player_sessions() -> None:
+    st.header("📅 Mes séances")
     user = st.session_state["user"]
-    st.header("📅 Mes convocations")
 
     sessions = db.list_sessions_for_player(user["id"])
     if not sessions:
-        st.info("Tu n'as aucune convocation pour le moment.")
+        st.info("Aucune convocation pour le moment.")
+        st.session_state.pop("player_selected_session", None)
         return
 
-    events = _sessions_to_events(sessions)
-    state = calendar(
+    events = [_session_to_event(s) for s in sessions]
+
+    st.caption("Clique sur une séance pour afficher ses détails.")
+
+    cal_result = calendar(
         events=events,
-        options=_calendar_options(),
-        key="player_calendar",
+        options=CALENDAR_OPTIONS,
+        custom_css=CALENDAR_CSS,
+        key="cal_player",
     )
-    selected_id = _get_selected_id_from_calendar_state(state)
+    _handle_calendar_click(cal_result, "player_selected_session")
+
+    selected_id = st.session_state.get("player_selected_session")
+    if selected_id is None:
+        st.info("👉 Sélectionne une séance dans le calendrier pour voir les détails.")
+        _legend()
+        return
+
+    # Vérifie que le joueur est bien convoqué à cette séance
+    if not db.is_player_convoque(selected_id, user["id"]):
+        st.session_state.pop("player_selected_session", None)
+        st.rerun()
+        return
+
+    session = db.get_session(selected_id)
+    if session is None:
+        st.session_state.pop("player_selected_session", None)
+        st.rerun()
+        return
 
     st.markdown("---")
-    st.subheader("Détail d'une séance")
-    options = {
-        f"{s['date']} {s['time']} — {s['title']} ({STATUT_EMOJI.get(s['status'], '')})": s["id"]
-        for s in sessions
-    }
-    default_idx = 0
-    if selected_id:
-        for i, sid in enumerate(options.values()):
-            if sid == selected_id:
-                default_idx = i
-                break
-    choix = st.selectbox(
-        "Choisir une séance",
-        list(options.keys()),
-        index=default_idx,
-        key="player_select_session",
-    )
-    _render_player_session_detail(options[choix])
+    header_cols = st.columns([6, 1])
+    with header_cols[0]:
+        j = session.get("j_relative") or ""
+        flag = f"[{j}] " if j else ""
+        st.subheader(f"🗂️ {flag}{session['title']}")
+        st.caption(f"{session['date']} à {session['time']}")
+    with header_cols[1]:
+        if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
+            st.session_state.pop("player_selected_session", None)
+            st.rerun()
 
+    if session.get("description"):
+        st.markdown(session["description"])
 
-def _render_player_session_detail(session_id: int) -> None:
-    session = db.get_session(session_id)
-    if not session:
-        return
-
-    st.markdown(f"### {session['title']}")
-    st.caption(f"{session['date']} à {session['time']} — {session['day_relative'] or ''}")
-    if session["description"]:
-        st.write(session["description"])
-
-    procedes = db.list_procedes(session_id)
+    procedes = db.list_procedes(session["id"])
     if procedes:
-        st.markdown("**Procédés de la séance**")
-        df_proc = pd.DataFrame([{
-            "Ordre": p["ordre"],
-            "Contenu": p["name"],
-            "Durée (min)": p["duration"],
-        } for p in procedes])
-        st.table(df_proc)
+        st.markdown("**Procédés :**")
+        df = pd.DataFrame(
+            [{"Procédé": p["label"], "Durée (min)": p["duration"]} for p in procedes]
+        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-    pdfs = db.list_pdfs(session_id)
+    pdfs = db.list_pdfs(session["id"])
     if pdfs:
-        st.markdown("**Documents joints**")
-        for pdf in pdfs:
-            fp = Path(pdf["filepath"])
-            if fp.exists():
-                with open(fp, "rb") as f:
+        st.markdown("**Documents :**")
+        for p in pdfs:
+            try:
+                with open(p["path"], "rb") as f:
                     st.download_button(
-                        f"📄 {pdf['filename']}",
+                        label=f"📄 {p['filename']}",
                         data=f.read(),
-                        file_name=pdf["filename"],
+                        file_name=p["filename"],
                         mime="application/pdf",
-                        key=f"ppdf_{pdf['id']}",
+                        key=f"player_dl_{p['id']}",
                     )
+            except FileNotFoundError:
+                st.warning(f"Fichier manquant : {p['filename']}")
+
+    _legend()

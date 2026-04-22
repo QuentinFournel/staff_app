@@ -16,7 +16,7 @@ football_app/
 ├── app.py                    # Point d'entrée Streamlit + navigation
 ├── auth.py                   # Connexion via st.secrets
 ├── database.py               # Fonctions SQLite (CRUD)
-├── ui_sessions.py            # Interfaces séances (calendrier mensuel)
+├── ui_sessions.py            # Calendrier + détails au clic
 ├── ui_questionnaires.py      # Interfaces questionnaires (sliders masqués)
 ├── requirements.txt
 ├── README.md
@@ -116,7 +116,8 @@ Tant que tu n'as pas migré : l'app est **parfaite pour tester**, mais considèr
 
 ## 4. Rappels fonctionnels
 
-- **Calendrier mensuel** (streamlit-calendar) avec couleurs par jour relatif (J-1, J-2…), navigation prev/next/aujourd'hui, vues mois/semaine/liste.
+- **Calendrier mensuel cliquable** (streamlit-calendar) avec couleurs par jour relatif (J-1, J-2…). **Plus de menu déroulant** : on clique directement sur une séance dans le calendrier pour afficher ses détails / sa gestion en dessous.
+- **Création de séance** dans un onglet dédié (`➕ Créer une séance`) — ne perturbe pas la navigation dans le calendrier.
 - **Ballons animés** à la création d'une séance, d'un questionnaire, et à l'envoi des réponses joueur.
 - **Slider 0-100 "aveugle"** : le joueur déplace un curseur de 0 à 100 (pas de 1), sans voir le chiffre. 👎 à gauche, 👍 à droite. La valeur stockée est bien un entier 0-100 pour l'analyse.
 - **Ajout PDF via formulaire** : l'upload ne se déclenche qu'au clic sur "Ajouter le PDF", plus de boucle d'ajout.
