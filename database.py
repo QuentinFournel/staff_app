@@ -149,12 +149,6 @@ def upsert_user(username: str, role: str, full_name: str) -> int:
 def sync_users_from_secrets(users: Mapping[str, Mapping]) -> None:
     """
     Synchronise tous les utilisateurs depuis le dict des secrets.
-    Format attendu :
-        {
-            "staff":  {"password": "...", "role": "staff",  "full_name": "..."},
-            "mbappe": {"password": "...", "role": "joueur", "full_name": "..."},
-            ...
-        }
     Le password n'est PAS stocké en base (l'auth est gérée côté secrets).
     """
     for username, data in users.items():

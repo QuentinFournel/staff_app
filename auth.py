@@ -6,15 +6,15 @@ Authentification via les secrets Streamlit.
 Les identifiants sont définis dans .streamlit/secrets.toml (local) ou dans
 "Settings → Secrets" sur share.streamlit.io. Format attendu :
 
-    [users.staff]
+    [users.amaennel]
     password  = "motdepasse_staff"
     role      = "staff"
-    full_name = "Coach Didier"
+    full_name = "Antoine Maennel"
 
-    [users.mbappe]
-    password  = "motdepasse_mbappe"
+    [users.jsmith]
+    password  = "motdepasse_joueur"
     role      = "joueur"
-    full_name = "Kylian Mbappé"
+    full_name = "Jonas Smith"
 
 Aucune inscription possible depuis l'UI : le staff crée les comptes en éditant
 les secrets, puis transmet les identifiants aux joueurs.
@@ -30,9 +30,7 @@ def _load_users_from_secrets() -> dict:
     try:
         users = st.secrets["users"]
     except Exception:
-        # Pas de fichier secrets.toml en local ou pas de bloc [users]
         return {}
-    # On convertit en dict classique pour pouvoir l'itérer simplement.
     return {name: dict(data) for name, data in users.items()}
 
 
@@ -64,8 +62,6 @@ def login_form() -> None:
         st.error("Identifiants invalides.")
         return
 
-    # Identifiants OK -> on récupère l'id en base (les users sont synchronisés
-    # depuis les secrets au démarrage de l'app, cf. app.py).
     udata = users[username]
     row = db.get_user_by_username(username)
     if row is None:

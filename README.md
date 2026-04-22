@@ -69,27 +69,27 @@ L'application s'ouvre sur http://localhost:8501.
 
 1. Va sur [share.streamlit.io](https://share.streamlit.io) et connecte ton compte GitHub.
 2. "New app" → sélectionne ton repo, la branche `main`, et `app.py` comme point d'entrée.
-3. Avant de "Deploy", clique sur **"Advanced settings"** → **"Secrets"** et colle le contenu de ton `secrets.toml` (les vrais identifiants). Exemple :
+3. Avant de "Deploy", clique sur **"Advanced settings"** → **"Secrets"** et colle le contenu de ton `secrets.toml`. Exemple :
 
    ```toml
-   [users.staff]
-   password  = "motdepasse_solide_staff"
+   [users.amaennel]
+   password  = "motdepasse_antoine"
    role      = "staff"
-   full_name = "Coach Didier"
+   full_name = "Antoine Maennel"
 
-   [users.mbappe]
-   password  = "motdepasse_joueur_1"
+   [users.jsmith]
+   password  = "motdepasse_jonas"
    role      = "joueur"
-   full_name = "Kylian Mbappé"
+   full_name = "Jonas Smith"
    ```
 4. Déploie. L'URL publique sera du type `https://<slug>.streamlit.app`.
 
-### Étape 3 — Ajouter / modifier des joueurs
+### Étape 3 — Ajouter / modifier des utilisateurs
 
 - Soit tu modifies **Settings → Secrets** dans l'interface Streamlit Cloud (l'app redémarre automatiquement et l'utilisateur est créé au prochain démarrage).
 - Soit tu fais la même chose en local dans `.streamlit/secrets.toml`.
 
-Les rôles autorisés sont `staff` et `joueur`. Les noms d'utilisateur doivent être écrits en **minuscules**.
+Le nom de la section (après `users.`) EST le nom d'utilisateur que la personne saisira pour se connecter. Les rôles autorisés sont `staff` et `joueur`. Les noms d'utilisateur doivent être écrits en **minuscules**.
 
 ---
 
@@ -119,6 +119,7 @@ Tant que tu n'as pas migré : l'app est **parfaite pour tester**, mais considèr
 - **Calendrier mensuel** (streamlit-calendar) avec couleurs par jour relatif (J-1, J-2…), navigation prev/next/aujourd'hui, vues mois/semaine/liste.
 - **Ballons animés** à la création d'une séance, d'un questionnaire, et à l'envoi des réponses joueur.
 - **Slider 0-100 "aveugle"** : le joueur déplace un curseur de 0 à 100 (pas de 1), sans voir le chiffre. 👎 à gauche, 👍 à droite. La valeur stockée est bien un entier 0-100 pour l'analyse.
+- **Ajout PDF via formulaire** : l'upload ne se déclenche qu'au clic sur "Ajouter le PDF", plus de boucle d'ajout.
 
 ---
 

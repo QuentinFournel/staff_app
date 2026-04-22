@@ -5,6 +5,7 @@ Interfaces Streamlit pour la partie "Calendrier / Gestion des séances".
 
 - Calendrier mensuel interactif (streamlit-calendar).
 - Ballons animés à la création d'une séance.
+- Ajout de PDF encapsulé dans un formulaire (évite la boucle d'ajout).
 """
 
 import time
@@ -182,6 +183,7 @@ def _staff_session_detail(session_id: int) -> None:
                 else:
                     st.warning("Le nom est obligatoire.")
 
+    # --- PDF ---
     st.markdown("**Documents PDF**")
     pdfs = db.list_pdfs(session_id)
     for pdf in pdfs:
@@ -195,13 +197,19 @@ def _staff_session_detail(session_id: int) -> None:
                     mime="application/pdf",
                     key=f"pdf_{pdf['id']}",
                 )
-    uploaded = st.file_uploader(
-        "Joindre un PDF", type=["pdf"], key=f"upload_{session_id}"
-    )
-    if uploaded is not None:
-        db.add_pdf(session_id, uploaded.name, uploaded.read())
-        st.success("PDF ajouté.")
-        st.rerun()
+
+    # Formulaire dédié pour l'ajout d'un PDF.
+    # clear_on_submit=True vide le file_uploader après l'ajout,
+    # ce qui évite que le PDF soit ré-enregistré à chaque rerun.
+    with st.form(f"pdf_form_{session_id}", clear_on_submit=True):
+        new_pdf = st.file_uploader("Joindre un PDF", type=["pdf"])
+        if st.form_submit_button("Ajouter le PDF"):
+            if new_pdf is not None:
+                db.add_pdf(session_id, new_pdf.name, new_pdf.read())
+                st.success("PDF ajouté.")
+                st.rerun()
+            else:
+                st.warning("Sélectionne un PDF avant de cliquer.")
 
     st.markdown("**Convocations**")
     _staff_convocations_block(session_id)
