@@ -1,10 +1,10 @@
 """
 ui_questionnaires.py
 --------------------
-Interfaces Streamlit pour la partie "Questionnaires post-séance".
+- Côté joueur : liste des questionnaires à remplir (slider 0-100 aveugle).
+- Côté staff : UNIQUEMENT la vue "Résultats consolidés" (création/gestion
+  se fait désormais dans les onglets de la séance — cf. ui_sessions.py).
 """
-
-import time
 
 import pandas as pd
 import streamlit as st
@@ -29,82 +29,17 @@ div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"] {
 
 
 # =============================================================================
-# VUE STAFF
+# VUE STAFF — Résultats consolidés
 # =============================================================================
 
-def render_staff_questionnaires() -> None:
-    st.header("📝 Questionnaires (staff)")
+def render_staff_results() -> None:
+    st.header("📊 Résultats des questionnaires")
+    st.caption(
+        "Vue d'ensemble pour comparer rapidement les réponses. "
+        "La création et la modification des questionnaires se font désormais "
+        "dans l'onglet 📝 Questionnaire de chaque séance."
+    )
 
-    tab_create, tab_results = st.tabs(["Créer un questionnaire", "📊 Résultats"])
-
-    with tab_create:
-        _staff_create_questionnaire()
-
-    with tab_results:
-        _staff_view_results()
-
-
-def _staff_create_questionnaire() -> None:
-    sessions = db.list_sessions()
-    if not sessions:
-        st.info("Crée d'abord une séance pour pouvoir lui associer un questionnaire.")
-        return
-
-    sessions_libres = [
-        s for s in sessions if db.get_questionnaire_by_session(s["id"]) is None
-    ]
-    if not sessions_libres:
-        st.info("Toutes les séances ont déjà un questionnaire.")
-        return
-
-    options = {
-        f"{s['date']} {s['time']} — {s['title']}": s["id"]
-        for s in sessions_libres
-    }
-    choix = st.selectbox("Séance associée", list(options.keys()))
-    session_id = options[choix]
-
-    with st.form("create_quest", clear_on_submit=True):
-        title = st.text_input(
-            "Titre du questionnaire",
-            value="Ressenti après séance",
-        )
-        st.markdown(
-            "Ajoute tes questions ci-dessous (une ligne par question). "
-            "Les questions vides seront ignorées."
-        )
-        default_df = pd.DataFrame([
-            {"Question": "Comment as-tu ressenti l'intensité de la séance ?"},
-            {"Question": "Comment évalues-tu ta forme physique ?"},
-            {"Question": "Niveau de plaisir sur cette séance ?"},
-        ])
-        df_questions = st.data_editor(
-            default_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="questions_editor",
-        )
-
-        submitted = st.form_submit_button("Créer le questionnaire")
-
-    if submitted:
-        questions = [
-            str(q).strip() for q in df_questions["Question"] if str(q).strip()
-        ]
-        if not questions:
-            st.error("Ajoute au moins une question.")
-            return
-        db.create_questionnaire(
-            session_id, title.strip() or "Questionnaire", questions
-        )
-
-        st.success("Questionnaire créé ✅")
-        st.balloons()
-        time.sleep(1.8)
-        st.rerun()
-
-
-def _staff_view_results() -> None:
     sessions = db.list_sessions()
     sessions_avec_quest = [
         s for s in sessions if db.get_questionnaire_by_session(s["id"]) is not None
@@ -121,6 +56,12 @@ def _staff_view_results() -> None:
     session_id = options[choix]
     quest = db.get_questionnaire_by_session(session_id)
 
+    render_questionnaire_results(quest)
+
+
+def render_questionnaire_results(quest: dict) -> None:
+    """Affiche le tableau + pivots d'un questionnaire donné.
+    Utilisé depuis la page de résultats ET depuis l'onglet séance."""
     st.markdown(f"### {quest['title']}")
     responses = db.list_responses(quest["id"])
     if not responses:

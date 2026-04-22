@@ -1,11 +1,7 @@
 """
 database.py
 -----------
-Couche d'accès SQLite pour l'application Club — Séances & Questionnaires.
-
-Migration automatique au démarrage (init_db) : si une DB existe avec une
-version plus ancienne du schéma, les colonnes manquantes sont ajoutées
-via ALTER TABLE pour chaque table.
+Couche d'accès SQLite + migration automatique des colonnes manquantes.
 """
 
 from __future__ import annotations
@@ -45,7 +41,7 @@ def get_conn():
 
 
 # ---------------------------------------------------------------------------
-# Migration légère : ajoute les colonnes manquantes d'une table
+# Migration légère
 # ---------------------------------------------------------------------------
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -56,16 +52,12 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    """Ajoute `column` à `table` si elle manque."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     existing = {r["name"] for r in rows}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
-# Colonnes attendues pour chaque table (hors PK autoincrement).
-# On utilise systématiquement des DEFAULT car SQLite interdit l'ajout d'une
-# colonne NOT NULL sans DEFAULT via ALTER TABLE.
 EXPECTED_COLUMNS = {
     "users": [
         ("username",  "TEXT NOT NULL DEFAULT ''"),
@@ -186,7 +178,6 @@ def init_db() -> None:
             """
         )
 
-        # --- Migrations : ajoute les colonnes manquantes sur chaque table ---
         for table, cols in EXPECTED_COLUMNS.items():
             if not _table_exists(conn, table):
                 continue
@@ -458,6 +449,28 @@ def create_questionnaire(session_id: int, title: str, questions: Iterable[str]) 
                 (qid, qtext, i),
             )
     return qid
+
+
+def update_questionnaire(questionnaire_id: int, title: str, questions: Iterable[str]) -> None:
+    """Met à jour le titre et remplace complètement la liste des questions."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "UPDATE questionnaires SET title = ? WHERE id = ?",
+            (title, questionnaire_id),
+        )
+        c.execute("DELETE FROM questions WHERE questionnaire_id = ?", (questionnaire_id,))
+        for i, qtext in enumerate(questions):
+            c.execute(
+                "INSERT INTO questions (questionnaire_id, text, ordre) VALUES (?, ?, ?)",
+                (questionnaire_id, qtext, i),
+            )
+
+
+def delete_questionnaire(questionnaire_id: int) -> None:
+    """Supprime un questionnaire et toutes ses questions/réponses (cascade)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM questionnaires WHERE id = ?", (questionnaire_id,))
 
 
 def get_questionnaire_by_session(session_id: int):

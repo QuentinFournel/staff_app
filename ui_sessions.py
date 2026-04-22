@@ -3,7 +3,9 @@ ui_sessions.py
 --------------
 Interfaces Streamlit pour la partie "Séances".
 
-Logique : on clique sur un événement du calendrier pour afficher ses détails.
+Chaque séance est ouverte via un clic sur le calendrier.
+Onglets par séance : Infos & procédés | Convocations | PDF | Questionnaire | Supprimer
+Le questionnaire vit désormais avec sa séance (création / édition / résultats / suppression).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import streamlit as st
 from streamlit_calendar import calendar
 
 import database as db
+from ui_questionnaires import render_questionnaire_results
 
 
 COULEUR_J = {
@@ -240,10 +243,11 @@ def _staff_calendar_and_details() -> None:
 def _staff_session_editor(session: dict) -> None:
     session_id = session["id"]
 
-    tab_info, tab_conv, tab_pdf, tab_danger = st.tabs(
-        ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "🗑️ Supprimer"]
+    tab_info, tab_conv, tab_pdf, tab_quest, tab_danger = st.tabs(
+        ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "📝 Questionnaire", "🗑️ Supprimer"]
     )
 
+    # --- Infos & procédés ---
     with tab_info:
         with st.form(f"edit_session_{session_id}"):
             col1, col2 = st.columns(2)
@@ -297,6 +301,7 @@ def _staff_session_editor(session: dict) -> None:
                 time.sleep(0.8)
                 st.rerun()
 
+    # --- Convocations ---
     with tab_conv:
         players = db.list_players()
         current_convs = db.list_convocations(session_id)
@@ -340,6 +345,7 @@ def _staff_session_editor(session: dict) -> None:
                         db.update_convocation_status(c["id"], new_status)
                         st.rerun()
 
+    # --- PDF ---
     with tab_pdf:
         pdfs = db.list_pdfs(session_id)
         if pdfs:
@@ -378,6 +384,11 @@ def _staff_session_editor(session: dict) -> None:
                 else:
                     st.warning("Sélectionne un PDF avant de cliquer.")
 
+    # --- Questionnaire ---
+    with tab_quest:
+        _staff_session_questionnaire(session)
+
+    # --- Supprimer ---
     with tab_danger:
         st.warning(
             "La suppression est définitive : convocations, PDF et questionnaire "
@@ -396,6 +407,131 @@ def _staff_session_editor(session: dict) -> None:
             db.delete_session(session_id)
             st.session_state.pop("staff_selected_session", None)
             st.success("Séance supprimée.")
+            time.sleep(0.6)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Onglet Questionnaire d'une séance (staff)
+# ---------------------------------------------------------------------------
+
+def _staff_session_questionnaire(session: dict) -> None:
+    session_id = session["id"]
+    quest = db.get_questionnaire_by_session(session_id)
+
+    if quest is None:
+        _staff_create_questionnaire_for_session(session_id)
+    else:
+        _staff_manage_questionnaire(session, quest)
+
+
+def _staff_create_questionnaire_for_session(session_id: int) -> None:
+    st.markdown("Aucun questionnaire pour cette séance — crée-en un ci-dessous.")
+
+    with st.form(f"create_quest_{session_id}", clear_on_submit=True):
+        title = st.text_input(
+            "Titre du questionnaire",
+            value="Ressenti après séance",
+        )
+        st.markdown(
+            "Ajoute tes questions (une ligne par question). "
+            "Les questions vides seront ignorées."
+        )
+        default_df = pd.DataFrame([
+            {"Question": "Comment as-tu ressenti l'intensité de la séance ?"},
+            {"Question": "Comment évalues-tu ta forme physique ?"},
+            {"Question": "Niveau de plaisir sur cette séance ?"},
+        ])
+        df_questions = st.data_editor(
+            default_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"new_questions_editor_{session_id}",
+        )
+        submitted = st.form_submit_button("Créer le questionnaire")
+
+    if not submitted:
+        return
+
+    questions = [
+        str(q).strip() for q in df_questions["Question"] if str(q).strip()
+    ]
+    if not questions:
+        st.error("Ajoute au moins une question.")
+        return
+
+    db.create_questionnaire(
+        session_id, title.strip() or "Questionnaire", questions
+    )
+    st.success("Questionnaire créé ✅")
+    st.balloons()
+    time.sleep(1.5)
+    st.rerun()
+
+
+def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
+    sub_edit, sub_results, sub_danger = st.tabs(
+        ["✏️ Éditer", "📊 Résultats", "🗑️ Supprimer"]
+    )
+
+    # --- Éditer ---
+    with sub_edit:
+        questions_cur = db.list_questions(quest["id"])
+        has_responses = db.list_responses(quest["id"])
+        if has_responses:
+            st.warning(
+                "⚠️ Des réponses ont déjà été enregistrées. "
+                "Modifier les questions peut désaligner les données existantes."
+            )
+
+        with st.form(f"edit_quest_{quest['id']}"):
+            title = st.text_input("Titre du questionnaire", value=quest["title"])
+            df = pd.DataFrame(
+                [{"Question": q["text"]} for q in questions_cur]
+                or [{"Question": ""}]
+            )
+            df_edit = st.data_editor(
+                df,
+                num_rows="dynamic",
+                use_container_width=True,
+                key=f"edit_questions_editor_{quest['id']}",
+            )
+            if st.form_submit_button("Enregistrer"):
+                new_qs = [
+                    str(q).strip() for q in df_edit["Question"] if str(q).strip()
+                ]
+                if not new_qs:
+                    st.error("Il doit rester au moins une question.")
+                else:
+                    db.update_questionnaire(
+                        quest["id"], title.strip() or quest["title"], new_qs
+                    )
+                    st.success("Questionnaire mis à jour ✅")
+                    time.sleep(0.8)
+                    st.rerun()
+
+    # --- Résultats ---
+    with sub_results:
+        render_questionnaire_results(quest)
+
+    # --- Supprimer ---
+    with sub_danger:
+        st.warning(
+            "La suppression retire le questionnaire, ses questions et **toutes** "
+            "les réponses des joueurs."
+        )
+        confirm = st.checkbox(
+            "Je confirme vouloir supprimer le questionnaire",
+            key=f"confirm_del_quest_{quest['id']}",
+        )
+        if st.button(
+            "Supprimer le questionnaire",
+            type="primary",
+            disabled=not confirm,
+            key=f"btn_del_quest_{quest['id']}",
+        ):
+            db.delete_questionnaire(quest["id"])
+            st.success("Questionnaire supprimé.")
             time.sleep(0.6)
             st.rerun()
 

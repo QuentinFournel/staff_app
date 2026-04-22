@@ -2,6 +2,10 @@
 app.py
 ------
 Point d'entrée Streamlit.
+
+Côté staff : la gestion des questionnaires a été déplacée directement dans
+les onglets de chaque séance. La page globale "Questionnaires" ne sert plus
+qu'à consulter les résultats consolidés (vue comparative rapide).
 """
 
 import streamlit as st
@@ -9,7 +13,7 @@ import streamlit as st
 import database as db
 import auth
 from ui_sessions import render_staff_sessions, render_player_sessions
-from ui_questionnaires import render_staff_questionnaires, render_player_questionnaires
+from ui_questionnaires import render_staff_results, render_player_questionnaires
 
 
 st.set_page_config(
@@ -47,7 +51,7 @@ def main() -> None:
         if user["role"] == "staff":
             page = st.radio(
                 "Navigation",
-                ["📅 Séances", "📝 Questionnaires"],
+                ["📅 Séances", "📊 Résultats questionnaires"],
                 label_visibility="collapsed",
             )
         else:
@@ -64,8 +68,8 @@ def main() -> None:
     if user["role"] == "staff":
         if page == "📅 Séances":
             render_staff_sessions()
-        elif page == "📝 Questionnaires":
-            render_staff_questionnaires()
+        elif page == "📊 Résultats questionnaires":
+            render_staff_results()
     else:
         if page == "📅 Mes séances":
             render_player_sessions()
