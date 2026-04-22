@@ -2,10 +2,6 @@
 ui_questionnaires.py
 --------------------
 Interfaces Streamlit pour la partie "Questionnaires post-séance".
-
-- Slider 0 -> 100 avec pas de 1, valeur numérique MASQUÉE (CSS).
-- 👎 à gauche, 👍 à droite pour guider le joueur.
-- Ballons animés à la création d'un questionnaire et à l'envoi des réponses.
 """
 
 import time

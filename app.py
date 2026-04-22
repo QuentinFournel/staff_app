@@ -2,14 +2,6 @@
 app.py
 ------
 Point d'entrée Streamlit.
-Lance l'application avec :
-    streamlit run app.py
-
-Au démarrage :
-1. Création des tables SQLite si besoin.
-2. Synchronisation des utilisateurs depuis les secrets Streamlit.
-   -> Ajoute / met à jour en base les comptes définis dans secrets.toml.
-   -> Aucun utilisateur n'est créé depuis l'UI.
 """
 
 import streamlit as st
@@ -27,7 +19,7 @@ st.set_page_config(
 )
 
 
-# 1. Base de données
+# 1. Base de données (init + migrations automatiques)
 db.init_db()
 
 # 2. Synchronisation des utilisateurs depuis les secrets
@@ -37,7 +29,6 @@ try:
         {name: dict(data) for name, data in users_from_secrets.items()}
     )
 except Exception:
-    # Pas de secrets disponibles -> on affichera un message explicite au login.
     pass
 
 

@@ -10,6 +10,10 @@ convocations, séances et questionnaires via un `user_id` stable.
 Tables :
     users, sessions, procedes, convocations, pdfs,
     questionnaires, questions, responses
+
+Migration automatique au démarrage (init_db) : si une DB existe avec une
+version plus ancienne du schéma (par ex. sans la colonne `j_relative`),
+les colonnes manquantes sont ajoutées via ALTER TABLE.
 """
 
 from __future__ import annotations
@@ -46,6 +50,26 @@ def get_conn():
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Migration légère : ajoute une colonne si elle manque
+# ---------------------------------------------------------------------------
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Ajoute `column` à `table` si elle manque. Utile pour migrer une DB
+    créée avec une version plus ancienne du schéma."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {r["name"] for r in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +144,11 @@ def init_db() -> None:
             );
             """
         )
+
+        # Migrations : colonnes qui n'existaient pas dans les versions antérieures
+        if _table_exists(conn, "sessions"):
+            _ensure_column(conn, "sessions", "description", "TEXT")
+            _ensure_column(conn, "sessions", "j_relative", "TEXT")
 
 
 # ---------------------------------------------------------------------------

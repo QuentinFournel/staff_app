@@ -3,23 +3,15 @@ ui_sessions.py
 --------------
 Interfaces Streamlit pour la partie "Séances".
 
-NOUVELLE LOGIQUE : plus de menu déroulant de choix de séance.
+Logique : plus de menu déroulant de choix de séance.
 On clique directement sur un événement dans le calendrier pour afficher
 ses détails / sa gestion en dessous.
-
-- Calendrier mensuel (streamlit-calendar) avec couleur selon J-relative.
-- Clic sur un événement -> stocke l'id dans st.session_state et affiche
-  le bloc de détails en dessous.
-- Staff : création de séance dans un onglet séparé, puis gestion (édition,
-  convocations, PDF, suppression) via le clic sur le calendrier.
-- Joueur : consulte ses séances (convocations, détails, PDF) en cliquant sur
-  l'événement dans son calendrier.
 """
 
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
@@ -33,7 +25,7 @@ import database as db
 # ---------------------------------------------------------------------------
 
 COULEUR_J = {
-    "J":    "#2E7D32",   # jour du match
+    "J":    "#2E7D32",
     "J-1":  "#66BB6A",
     "J-2":  "#9CCC65",
     "J-3":  "#FFEB3B",
@@ -90,10 +82,7 @@ def _session_to_event(s: dict) -> dict:
 
 
 def _handle_calendar_click(cal_result, state_key: str) -> None:
-    """
-    Si le dernier callback est un clic sur un event, mémorise son id dans
-    st.session_state[state_key] et rerun.
-    """
+    """Si le dernier callback est un clic sur un event, mémorise son id."""
     if not cal_result:
         return
     cb = cal_result.get("callback")
@@ -108,6 +97,15 @@ def _handle_calendar_click(cal_result, state_key: str) -> None:
             if st.session_state.get(state_key) != sid:
                 st.session_state[state_key] = sid
                 st.rerun()
+
+
+def _legend() -> None:
+    with st.expander("🎨 Légende des couleurs par jour relatif"):
+        parts = [
+            f"<span style='background:{color};padding:2px 8px;border-radius:4px;color:white;margin-right:6px;'>{key}</span>"
+            for key, color in COULEUR_J.items()
+        ]
+        st.markdown(" ".join(parts), unsafe_allow_html=True)
 
 
 # ===========================================================================
@@ -126,10 +124,6 @@ def render_staff_sessions() -> None:
         _staff_calendar_and_details()
 
 
-# ---------------------------------------------------------------------------
-# Création d'une séance
-# ---------------------------------------------------------------------------
-
 def _staff_create_session() -> None:
     user = st.session_state["user"]
 
@@ -144,7 +138,10 @@ def _staff_create_session() -> None:
                 index=list(COULEUR_J.keys()).index("J-1"),
             )
         with col2:
-            time_val = st.time_input("Heure", value=datetime.now().time().replace(second=0, microsecond=0))
+            time_val = st.time_input(
+                "Heure",
+                value=datetime.now().time().replace(second=0, microsecond=0),
+            )
             description = st.text_area("Description", height=104)
 
         st.markdown("**Procédés** (optionnel)")
@@ -199,21 +196,15 @@ def _staff_create_session() -> None:
     st.success(f"Séance « {title} » créée ✅")
     st.balloons()
     time.sleep(1.8)
-    # Pré-sélectionne la nouvelle séance dans le calendrier
     st.session_state["staff_selected_session"] = session_id
     st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# Calendrier + bloc de détails (zone unique, pilotée par le clic)
-# ---------------------------------------------------------------------------
 
 def _staff_calendar_and_details() -> None:
     sessions = db.list_sessions()
 
     if not sessions:
         st.info("Aucune séance pour le moment. Crée-en une via l'onglet « ➕ Créer une séance ».")
-        # On efface une éventuelle sélection persistée.
         st.session_state.pop("staff_selected_session", None)
         return
 
@@ -239,7 +230,6 @@ def _staff_calendar_and_details() -> None:
 
     session = db.get_session(selected_id)
     if session is None:
-        # La séance a été supprimée -> on nettoie.
         st.session_state.pop("staff_selected_session", None)
         st.rerun()
         return
@@ -257,19 +247,6 @@ def _staff_calendar_and_details() -> None:
     _legend()
 
 
-def _legend() -> None:
-    with st.expander("🎨 Légende des couleurs par jour relatif"):
-        parts = [
-            f"<span style='background:{color};padding:2px 8px;border-radius:4px;color:white;margin-right:6px;'>{key}</span>"
-            for key, color in COULEUR_J.items()
-        ]
-        st.markdown(" ".join(parts), unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------------------
-# Bloc détail / gestion d'UNE séance (staff)
-# ---------------------------------------------------------------------------
-
 def _staff_session_editor(session: dict) -> None:
     session_id = session["id"]
 
@@ -277,7 +254,7 @@ def _staff_session_editor(session: dict) -> None:
         ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "🗑️ Supprimer"]
     )
 
-    # --- Infos & procédés -----------------------------------------------------
+    # --- Infos & procédés ---
     with tab_info:
         with st.form(f"edit_session_{session_id}"):
             col1, col2 = st.columns(2)
@@ -331,7 +308,7 @@ def _staff_session_editor(session: dict) -> None:
                 time.sleep(0.8)
                 st.rerun()
 
-    # --- Convocations ---------------------------------------------------------
+    # --- Convocations ---
     with tab_conv:
         players = db.list_players()
         current_convs = db.list_convocations(session_id)
@@ -375,7 +352,7 @@ def _staff_session_editor(session: dict) -> None:
                         db.update_convocation_status(c["id"], new_status)
                         st.rerun()
 
-    # --- PDF ------------------------------------------------------------------
+    # --- PDF ---
     with tab_pdf:
         pdfs = db.list_pdfs(session_id)
         if pdfs:
@@ -402,7 +379,6 @@ def _staff_session_editor(session: dict) -> None:
         else:
             st.caption("Aucun PDF pour le moment.")
 
-        # Upload dans un form pour éviter la boucle d'ajout automatique
         with st.form(f"pdf_form_{session_id}", clear_on_submit=True):
             new_pdf = st.file_uploader("Joindre un PDF", type=["pdf"])
             submitted_pdf = st.form_submit_button("Ajouter le PDF")
@@ -415,14 +391,22 @@ def _staff_session_editor(session: dict) -> None:
                 else:
                     st.warning("Sélectionne un PDF avant de cliquer.")
 
-    # --- Supprimer ------------------------------------------------------------
+    # --- Supprimer ---
     with tab_danger:
         st.warning(
             "La suppression est définitive : convocations, PDF et questionnaire "
             "associés seront également supprimés."
         )
-        confirm = st.checkbox("Je confirme vouloir supprimer cette séance", key=f"confirm_del_{session_id}")
-        if st.button("Supprimer la séance", type="primary", disabled=not confirm, key=f"btn_del_{session_id}"):
+        confirm = st.checkbox(
+            "Je confirme vouloir supprimer cette séance",
+            key=f"confirm_del_{session_id}",
+        )
+        if st.button(
+            "Supprimer la séance",
+            type="primary",
+            disabled=not confirm,
+            key=f"btn_del_{session_id}",
+        ):
             db.delete_session(session_id)
             st.session_state.pop("staff_selected_session", None)
             st.success("Séance supprimée.")
@@ -462,7 +446,6 @@ def render_player_sessions() -> None:
         _legend()
         return
 
-    # Vérifie que le joueur est bien convoqué à cette séance
     if not db.is_player_convoque(selected_id, user["id"]):
         st.session_state.pop("player_selected_session", None)
         st.rerun()

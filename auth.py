@@ -2,22 +2,6 @@
 auth.py
 -------
 Authentification via les secrets Streamlit.
-
-Les identifiants sont définis dans .streamlit/secrets.toml (local) ou dans
-"Settings → Secrets" sur share.streamlit.io. Format attendu :
-
-    [users.amaennel]
-    password  = "motdepasse_staff"
-    role      = "staff"
-    full_name = "Antoine Maennel"
-
-    [users.jsmith]
-    password  = "motdepasse_joueur"
-    role      = "joueur"
-    full_name = "Jonas Smith"
-
-Aucune inscription possible depuis l'UI : le staff crée les comptes en éditant
-les secrets, puis transmet les identifiants aux joueurs.
 """
 
 import streamlit as st
@@ -26,7 +10,6 @@ import database as db
 
 
 def _load_users_from_secrets() -> dict:
-    """Renvoie le dict des utilisateurs définis dans les secrets, sinon {}."""
     try:
         users = st.secrets["users"]
     except Exception:
@@ -65,7 +48,6 @@ def login_form() -> None:
     udata = users[username]
     row = db.get_user_by_username(username)
     if row is None:
-        # Filet de sécurité : si la sync n'a pas eu lieu, on le fait à la volée.
         user_id = db.upsert_user(
             username=username,
             role=udata.get("role", "joueur"),
