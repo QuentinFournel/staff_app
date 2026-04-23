@@ -4,11 +4,8 @@ ui_sessions.py
 Interfaces Streamlit pour la partie "Séances".
 
 Chaque séance est ouverte via un clic sur le calendrier.
-Onglets par séance (staff) : Infos & procédés | Convocations | PDF |
-                             Questionnaire | Supprimer.
-
-Côté joueur : le questionnaire est intégré directement en bas de la page
-              séance (pas d'onglet séparé).
+Onglets par séance : Infos & procédés | Convocations | PDF | Questionnaire | Supprimer
+Le questionnaire vit désormais avec sa séance (création / édition / résultats / suppression).
 """
 
 from __future__ import annotations
@@ -21,10 +18,7 @@ import streamlit as st
 from streamlit_calendar import calendar
 
 import database as db
-from ui_questionnaires import (
-    render_questionnaire_results,
-    render_player_fill_questionnaire,
-)
+from ui_questionnaires import render_questionnaire_results
 
 
 COULEUR_J = {
@@ -69,6 +63,39 @@ CALENDAR_CSS = """
 """
 
 
+# CSS pour donner un look "segmented control" au radio horizontal utilisé
+# dans l'onglet Questionnaire (évite l'effet tabs-dans-tabs).
+SEGMENTED_RADIO_CSS = """
+<style>
+div[data-testid="stRadio"][data-segmented="1"] > div {
+    gap: 0 !important;
+    background: rgba(125, 125, 125, 0.08);
+    padding: 4px;
+    border-radius: 10px;
+    width: fit-content;
+}
+div[data-testid="stRadio"][data-segmented="1"] label {
+    padding: 6px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    margin: 0 !important;
+}
+div[data-testid="stRadio"][data-segmented="1"] label:hover {
+    background: rgba(125, 125, 125, 0.12);
+}
+div[data-testid="stRadio"][data-segmented="1"] label[data-checked="true"] {
+    background: var(--background-color, #fff);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    font-weight: 600;
+}
+div[data-testid="stRadio"][data-segmented="1"] label > div:first-child {
+    display: none !important;
+}
+</style>
+"""
+
+
 def _session_to_event(s: dict) -> dict:
     color = COULEUR_J.get(s.get("j_relative") or "Autre", COULEUR_J["Autre"])
     start = f"{s['date']}T{s['time']}"
@@ -85,35 +112,44 @@ def _session_to_event(s: dict) -> dict:
 
 
 def _handle_calendar_click(cal_result, state_key: str) -> None:
+    """Applique le clic calendrier à l'état, en ignorant le cal_result « en cache ».
+
+    streamlit_calendar renvoie, au rerun suivant un close, le même eventClick
+    qu'avant (cache interne du composant). Pour éviter que la séance qu'on vient
+    de fermer se ré-ouvre toute seule, on consomme un flag « skip_next » posé
+    par `_close_selected`. Plus besoin de re-monter le composant (= plus de flash).
+    """
+    skip_key = f"{state_key}_skip_next"
+    if st.session_state.pop(skip_key, False):
+        return
+
     if not cal_result:
         return
-    cb = cal_result.get("callback")
-    if cb == "eventClick":
-        event = cal_result.get("eventClick", {}).get("event", {})
-        event_id = event.get("id")
-        if event_id is not None:
-            try:
-                sid = int(event_id)
-            except (TypeError, ValueError):
-                return
-            if st.session_state.get(state_key) != sid:
-                st.session_state[state_key] = sid
-                st.rerun()
+    if cal_result.get("callback") != "eventClick":
+        return
+    event = cal_result.get("eventClick", {}).get("event", {})
+    event_id = event.get("id")
+    if event_id is None:
+        return
+    try:
+        sid = int(event_id)
+    except (TypeError, ValueError):
+        return
+
+    if st.session_state.get(state_key) != sid:
+        st.session_state[state_key] = sid
+        st.rerun()
 
 
 def _close_selected(state_key: str) -> None:
+    """Ferme la séance ouverte sans re-monter le composant calendar.
+
+    Le flag `skip_next` fait que la prochaine lecture de cal_result (forcément
+    celle qui contient le clic en cache juste avant le close) sera ignorée.
+    """
     st.session_state.pop(state_key, None)
+    st.session_state[f"{state_key}_skip_next"] = True
     st.rerun()
-
-
-def _legend() -> None:
-    with st.expander("🎨 Légende des couleurs par jour relatif"):
-        parts = [
-            f"<span style='background:{color};padding:2px 8px;border-radius:4px;"
-            f"color:white;margin-right:6px;'>{key}</span>"
-            for key, color in COULEUR_J.items()
-        ]
-        st.markdown(" ".join(parts), unsafe_allow_html=True)
 
 
 # ===========================================================================
@@ -230,7 +266,6 @@ def _staff_calendar_and_details() -> None:
     selected_id = st.session_state.get("staff_selected_session")
     if selected_id is None:
         st.info("👉 Sélectionne une séance dans le calendrier pour voir ses détails.")
-        _legend()
         return
 
     session = db.get_session(selected_id)
@@ -248,7 +283,6 @@ def _staff_calendar_and_details() -> None:
             _close_selected("staff_selected_session")
 
     _staff_session_editor(session)
-    _legend()
 
 
 def _staff_session_editor(session: dict) -> None:
@@ -314,47 +348,7 @@ def _staff_session_editor(session: dict) -> None:
 
     # --- Convocations ---
     with tab_conv:
-        players = db.list_players()
-        current_convs = db.list_convocations(session_id)
-        current_ids = {c["player_id"] for c in current_convs}
-
-        st.markdown("**Liste des joueurs convoqués**")
-        player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
-        default_labels = [l for l, pid in player_labels.items() if pid in current_ids]
-
-        with st.form(f"conv_form_{session_id}"):
-            new_selection = st.multiselect(
-                "Joueurs convoqués",
-                list(player_labels.keys()),
-                default=default_labels,
-            )
-            if st.form_submit_button("Mettre à jour les convocations"):
-                db.convoquer_joueurs(session_id, [player_labels[l] for l in new_selection])
-                st.success("Convocations mises à jour ✅")
-                time.sleep(0.6)
-                st.rerun()
-
-        st.markdown("**Statuts**")
-        convs = db.list_convocations(session_id)
-        if not convs:
-            st.info("Aucun joueur convoqué.")
-        else:
-            status_options = ["convoque", "present", "absent", "malade", "adapte"]
-            for c in convs:
-                cols = st.columns([4, 3])
-                with cols[0]:
-                    st.markdown(f"**{c['full_name']}** _({c['username']})_")
-                with cols[1]:
-                    new_status = st.selectbox(
-                        "Statut",
-                        status_options,
-                        index=status_options.index(c["status"]),
-                        key=f"status_{c['id']}",
-                        label_visibility="collapsed",
-                    )
-                    if new_status != c["status"]:
-                        db.update_convocation_status(c["id"], new_status)
-                        st.rerun()
+        _convocations_block(session_id)
 
     # --- PDF ---
     with tab_pdf:
@@ -417,9 +411,76 @@ def _staff_session_editor(session: dict) -> None:
         ):
             db.delete_session(session_id)
             st.session_state.pop("staff_selected_session", None)
+            st.session_state["staff_selected_session_skip_next"] = True
             st.success("Séance supprimée.")
             time.sleep(0.6)
             st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Onglet Convocations
+# ---------------------------------------------------------------------------
+
+def _convocations_block(session_id: int) -> None:
+    players = db.list_players()
+    convs = db.list_convocations(session_id)
+    current_ids = {c["player_id"] for c in convs}
+
+    st.markdown("**Joueurs convoqués**")
+    player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
+    default_labels = [l for l, pid in player_labels.items() if pid in current_ids]
+
+    # La key du multiselect dépend de l'état courant → forcer le composant
+    # à se resynchroniser après une màj (évite les cas où la liste ne reflète
+    # plus ce qu'on vient d'enregistrer).
+    ms_key = f"conv_ms_{session_id}_{len(current_ids)}_{sum(current_ids)}"
+
+    with st.form(f"conv_form_{session_id}"):
+        new_selection = st.multiselect(
+            "Sélection",
+            list(player_labels.keys()),
+            default=default_labels,
+            key=ms_key,
+            label_visibility="collapsed",
+        )
+        if st.form_submit_button("Mettre à jour les convocations"):
+            db.convoquer_joueurs(
+                session_id, [player_labels[l] for l in new_selection]
+            )
+            st.success("Convocations mises à jour ✅")
+            time.sleep(0.4)
+            st.rerun()
+
+    st.markdown("**Statuts**")
+    if not convs:
+        st.info("Aucun joueur convoqué.")
+        return
+
+    status_options = ["convoque", "present", "absent", "malade", "adapte"]
+    for c in convs:
+        cols = st.columns([4, 3, 1])
+        with cols[0]:
+            st.markdown(f"**{c['full_name']}** _({c['username']})_")
+        with cols[1]:
+            new_status = st.selectbox(
+                "Statut",
+                status_options,
+                index=status_options.index(c["status"]),
+                key=f"status_{c['id']}",
+                label_visibility="collapsed",
+            )
+            if new_status != c["status"]:
+                db.update_convocation_status(c["id"], new_status)
+                st.rerun()
+        with cols[2]:
+            if st.button(
+                "🗑️",
+                key=f"rm_conv_{c['id']}",
+                help="Retirer ce joueur de la convocation",
+                use_container_width=True,
+            ):
+                db.remove_convocation(c["id"])
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -481,70 +542,97 @@ def _staff_create_questionnaire_for_session(session_id: int) -> None:
 
 
 def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
-    sub_edit, sub_results, sub_danger = st.tabs(
-        ["✏️ Éditer", "📊 Résultats", "🗑️ Supprimer"]
-    )
+    # Segmented control → évite les tabs-dans-tabs.
+    views = ["✏️ Éditer", "📊 Résultats", "🗑️ Supprimer"]
+    view_key = f"quest_view_{quest['id']}"
 
-    # --- Éditer ---
-    with sub_edit:
-        questions_cur = db.list_questions(quest["id"])
-        has_responses = db.list_responses(quest["id"])
-        if has_responses:
-            st.warning(
-                "⚠️ Des réponses ont déjà été enregistrées. "
-                "Modifier les questions peut désaligner les données existantes."
-            )
+    seg_ctrl = getattr(st, "segmented_control", None)
+    if seg_ctrl is not None:
+        view = seg_ctrl(
+            "Mode",
+            views,
+            default=views[0],
+            label_visibility="collapsed",
+            key=view_key,
+        )
+    else:
+        st.markdown(SEGMENTED_RADIO_CSS, unsafe_allow_html=True)
+        view = st.radio(
+            "Mode",
+            views,
+            horizontal=True,
+            label_visibility="collapsed",
+            key=view_key,
+        )
 
-        with st.form(f"edit_quest_{quest['id']}"):
-            title = st.text_input("Titre du questionnaire", value=quest["title"])
-            df = pd.DataFrame(
-                [{"Question": q["text"]} for q in questions_cur]
-                or [{"Question": ""}]
-            )
-            df_edit = st.data_editor(
-                df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key=f"edit_questions_editor_{quest['id']}",
-            )
-            if st.form_submit_button("Enregistrer"):
-                new_qs = [
-                    str(q).strip() for q in df_edit["Question"] if str(q).strip()
-                ]
-                if not new_qs:
-                    st.error("Il doit rester au moins une question.")
-                else:
-                    db.update_questionnaire(
-                        quest["id"], title.strip() or quest["title"], new_qs
-                    )
-                    st.success("Questionnaire mis à jour ✅")
-                    time.sleep(0.8)
-                    st.rerun()
+    if view is None:
+        view = views[0]
 
-    # --- Résultats ---
-    with sub_results:
+    st.markdown("")  # petit espace vertical
+
+    if view == "✏️ Éditer":
+        _quest_edit_block(quest)
+    elif view == "📊 Résultats":
         render_questionnaire_results(quest)
+    elif view == "🗑️ Supprimer":
+        _quest_delete_block(quest)
 
-    # --- Supprimer ---
-    with sub_danger:
+
+def _quest_edit_block(quest: dict) -> None:
+    questions_cur = db.list_questions(quest["id"])
+    has_responses = db.list_responses(quest["id"])
+    if has_responses:
         st.warning(
-            "La suppression retire le questionnaire, ses questions et **toutes** "
-            "les réponses des joueurs."
+            "⚠️ Des réponses ont déjà été enregistrées. "
+            "Modifier les questions peut désaligner les données existantes."
         )
-        confirm = st.checkbox(
-            "Je confirme vouloir supprimer le questionnaire",
-            key=f"confirm_del_quest_{quest['id']}",
+
+    with st.form(f"edit_quest_{quest['id']}"):
+        title = st.text_input("Titre du questionnaire", value=quest["title"])
+        df = pd.DataFrame(
+            [{"Question": q["text"]} for q in questions_cur]
+            or [{"Question": ""}]
         )
-        if st.button(
-            "Supprimer le questionnaire",
-            type="primary",
-            disabled=not confirm,
-            key=f"btn_del_quest_{quest['id']}",
-        ):
-            db.delete_questionnaire(quest["id"])
-            st.success("Questionnaire supprimé.")
-            time.sleep(0.6)
-            st.rerun()
+        df_edit = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"edit_questions_editor_{quest['id']}",
+        )
+        if st.form_submit_button("Enregistrer"):
+            new_qs = [
+                str(q).strip() for q in df_edit["Question"] if str(q).strip()
+            ]
+            if not new_qs:
+                st.error("Il doit rester au moins une question.")
+            else:
+                db.update_questionnaire(
+                    quest["id"], title.strip() or quest["title"], new_qs
+                )
+                st.success("Questionnaire mis à jour ✅")
+                time.sleep(0.8)
+                st.rerun()
+
+
+def _quest_delete_block(quest: dict) -> None:
+    st.warning(
+        "La suppression retire le questionnaire, ses questions et **toutes** "
+        "les réponses des joueurs."
+    )
+    confirm = st.checkbox(
+        "Je confirme vouloir supprimer le questionnaire",
+        key=f"confirm_del_quest_{quest['id']}",
+    )
+    if st.button(
+        "Supprimer le questionnaire",
+        type="primary",
+        disabled=not confirm,
+        key=f"btn_del_quest_{quest['id']}",
+    ):
+        db.delete_questionnaire(quest["id"])
+        st.success("Questionnaire supprimé.")
+        time.sleep(0.6)
+        st.rerun()
 
 
 # ===========================================================================
@@ -552,7 +640,7 @@ def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
 # ===========================================================================
 
 def render_player_sessions() -> None:
-    st.header("📅 Séances")
+    st.header("📅 Mes séances")
     user = st.session_state["user"]
 
     sessions = db.list_sessions_for_player(user["id"])
@@ -562,7 +650,7 @@ def render_player_sessions() -> None:
         return
 
     events = [_session_to_event(s) for s in sessions]
-    st.caption("Clique sur une séance pour afficher ses détails et remplir ton questionnaire.")
+    st.caption("Clique sur une séance pour afficher ses détails.")
 
     cal_result = calendar(
         events=events,
@@ -575,7 +663,6 @@ def render_player_sessions() -> None:
     selected_id = st.session_state.get("player_selected_session")
     if selected_id is None:
         st.info("👉 Sélectionne une séance dans le calendrier pour voir les détails.")
-        _legend()
         return
 
     if not db.is_player_convoque(selected_id, user["id"]):
@@ -626,12 +713,3 @@ def render_player_sessions() -> None:
                     )
             except FileNotFoundError:
                 st.warning(f"Fichier manquant : {p['filename']}")
-
-    # --- Questionnaire intégré à la séance ---
-    quest = db.get_questionnaire_by_session(session["id"])
-    if quest is not None:
-        st.markdown("---")
-        st.markdown("### 📝 Questionnaire de séance")
-        render_player_fill_questionnaire(quest, user["id"], show_title=False)
-
-    _legend()

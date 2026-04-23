@@ -1,17 +1,7 @@
 """
 database.py
 -----------
-Couche d'accès SQLite pour l'application "Séances & Questionnaires".
-
-Tables :
-    users             (id, username UNIQUE, full_name, role)
-    sessions          (id, title, description, j_relative, date, time, created_by)
-    procedes          (id, session_id, position, label, duration)
-    convocations      (id, session_id, player_id, status) — UNIQUE(session, player)
-    session_pdfs      (id, session_id, filename, path)
-    questionnaires    (id, session_id UNIQUE, title)
-    questions         (id, questionnaire_id, position, text)
-    responses         (id, player_id, question_id, value) — UNIQUE(player, question)
+Couche d'accès SQLite + migration automatique des colonnes manquantes.
 """
 
 from __future__ import annotations
@@ -23,28 +13,26 @@ from pathlib import Path
 from typing import Iterable
 
 
-# ---------------------------------------------------------------------------
-# Chemins
-# ---------------------------------------------------------------------------
-
-BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
-PDF_DIR = DATA_DIR / "pdfs"
-DB_PATH = DATA_DIR / "club.db"
-
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-PDF_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = Path(__file__).parent / "data" / "football.db"
+PDF_DIR = Path(__file__).parent / "data" / "pdfs"
 
 
 # ---------------------------------------------------------------------------
 # Connexion
 # ---------------------------------------------------------------------------
 
-@contextmanager
-def get_conn():
+def _connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PDF_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+
+@contextmanager
+def get_conn():
+    conn = _connect()
     try:
         yield conn
         conn.commit()
@@ -53,18 +41,80 @@ def get_conn():
 
 
 # ---------------------------------------------------------------------------
-# Init & migrations
+# Migration légère
 # ---------------------------------------------------------------------------
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {r["name"] for r in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+EXPECTED_COLUMNS = {
+    "users": [
+        ("username",  "TEXT NOT NULL DEFAULT ''"),
+        ("role",      "TEXT NOT NULL DEFAULT 'joueur'"),
+        ("full_name", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "sessions": [
+        ("title",       "TEXT NOT NULL DEFAULT ''"),
+        ("description", "TEXT"),
+        ("j_relative",  "TEXT"),
+        ("date",        "TEXT NOT NULL DEFAULT ''"),
+        ("time",        "TEXT NOT NULL DEFAULT ''"),
+        ("created_by",  "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "procedes": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("label",      "TEXT NOT NULL DEFAULT ''"),
+        ("duration",   "INTEGER NOT NULL DEFAULT 0"),
+        ("ordre",      "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "convocations": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("player_id",  "INTEGER NOT NULL DEFAULT 0"),
+        ("status",     "TEXT NOT NULL DEFAULT 'convoque'"),
+    ],
+    "pdfs": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("filename",   "TEXT NOT NULL DEFAULT ''"),
+        ("path",       "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "questionnaires": [
+        ("session_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("title",      "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "questions": [
+        ("questionnaire_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("text",             "TEXT NOT NULL DEFAULT ''"),
+        ("ordre",            "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "responses": [
+        ("question_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("player_id",   "INTEGER NOT NULL DEFAULT 0"),
+        ("value",       "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
+
 def init_db() -> None:
-    with get_conn() as c:
+    with get_conn() as conn:
+        c = conn.cursor()
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                username  TEXT UNIQUE NOT NULL,
-                full_name TEXT NOT NULL,
-                role      TEXT NOT NULL CHECK (role IN ('staff','player'))
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                username   TEXT UNIQUE NOT NULL,
+                role       TEXT NOT NULL CHECK (role IN ('staff','joueur')),
+                full_name  TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -74,221 +124,197 @@ def init_db() -> None:
                 j_relative  TEXT,
                 date        TEXT NOT NULL,
                 time        TEXT NOT NULL,
-                created_by  INTEGER,
-                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+                created_by  INTEGER NOT NULL REFERENCES users(id)
             );
 
             CREATE TABLE IF NOT EXISTS procedes (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                position   INTEGER NOT NULL DEFAULT 0,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 label      TEXT NOT NULL,
-                duration   INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                duration   INTEGER NOT NULL,
+                ordre      INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS convocations (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                player_id  INTEGER NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'convoque',
-                UNIQUE(session_id, player_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-                FOREIGN KEY (player_id)  REFERENCES users(id)    ON DELETE CASCADE
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                player_id  INTEGER NOT NULL REFERENCES users(id),
+                status     TEXT NOT NULL DEFAULT 'convoque'
+                    CHECK (status IN ('convoque','present','absent','malade','adapte')),
+                UNIQUE (session_id, player_id)
             );
 
-            CREATE TABLE IF NOT EXISTS session_pdfs (
+            CREATE TABLE IF NOT EXISTS pdfs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 filename   TEXT NOT NULL,
-                path       TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                path       TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS questionnaires (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL UNIQUE,
-                title      TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+                title      TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS questions (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                questionnaire_id INTEGER NOT NULL,
-                position         INTEGER NOT NULL DEFAULT 0,
-                text             TEXT NOT NULL,
-                FOREIGN KEY (questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                questionnaire_id   INTEGER NOT NULL REFERENCES questionnaires(id) ON DELETE CASCADE,
+                text               TEXT NOT NULL,
+                ordre              INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS responses (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                player_id   INTEGER NOT NULL,
-                question_id INTEGER NOT NULL,
-                value       INTEGER NOT NULL,
-                UNIQUE(player_id, question_id),
-                FOREIGN KEY (player_id)   REFERENCES users(id)     ON DELETE CASCADE,
-                FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id  INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+                player_id    INTEGER NOT NULL REFERENCES users(id),
+                value        INTEGER NOT NULL CHECK (value BETWEEN 0 AND 100),
+                UNIQUE (question_id, player_id)
             );
             """
         )
 
+        for table, cols in EXPECTED_COLUMNS.items():
+            if not _table_exists(conn, table):
+                continue
+            for col_name, col_ddl in cols:
+                _ensure_column(conn, table, col_name, col_ddl)
+
 
 # ---------------------------------------------------------------------------
-# Users
+# Utilisateurs
 # ---------------------------------------------------------------------------
 
-def sync_users_from_secrets(secrets_users: dict) -> None:
-    """Crée / met à jour les utilisateurs listés dans secrets.toml."""
-    with get_conn() as c:
-        for username, data in secrets_users.items():
-            full_name = data.get("full_name", username)
-            role      = data.get("role", "player")
-            c.execute(
-                """
-                INSERT INTO users (username, full_name, role)
-                VALUES (?, ?, ?)
-                ON CONFLICT(username) DO UPDATE SET
-                    full_name = excluded.full_name,
-                    role      = excluded.role
-                """,
-                (username, full_name, role),
-            )
+def upsert_user(username: str, role: str, full_name: str) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO users (username, role, full_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET
+                role = excluded.role,
+                full_name = excluded.full_name
+            """,
+            (username, role, full_name),
+        )
+        c.execute("SELECT id FROM users WHERE username = ?", (username,))
+        return c.fetchone()["id"]
 
 
-def get_user_by_username(username: str) -> sqlite3.Row | None:
-    with get_conn() as c:
-        return c.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
+def sync_users_from_secrets(users_dict: dict) -> None:
+    for username, data in users_dict.items():
+        upsert_user(
+            username=str(username).lower().strip(),
+            role=data.get("role", "joueur"),
+            full_name=data.get("full_name", username),
+        )
+
+
+def get_user_by_username(username: str):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username.lower().strip(),)
         ).fetchone()
+    return row
 
 
 def list_players() -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT id, username, full_name FROM users WHERE role = 'player' ORDER BY full_name"
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, username, full_name FROM users WHERE role = 'joueur' ORDER BY full_name"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
-# Sessions
+# Séances
 # ---------------------------------------------------------------------------
 
-def list_sessions() -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT * FROM sessions ORDER BY date, time"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def list_sessions_for_player(player_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            """
-            SELECT s.*
-            FROM sessions s
-            JOIN convocations c ON c.session_id = s.id
-            WHERE c.player_id = ?
-            ORDER BY s.date, s.time
-            """,
-            (player_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_session(session_id: int) -> dict | None:
-    with get_conn() as c:
-        row = c.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def create_session(
-    *,
-    title: str,
-    description: str,
-    j_relative: str,
-    date: str,
-    time: str,
-    created_by: int | None,
-    procedes: Iterable[tuple[str, int]],
-) -> int:
-    with get_conn() as c:
-        cur = c.execute(
+def create_session(title, description, j_relative, date, time, created_by, procedes=()):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
             """
             INSERT INTO sessions (title, description, j_relative, date, time, created_by)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (title, description, j_relative, date, time, created_by),
         )
-        session_id = cur.lastrowid
-        for pos, (label, duration) in enumerate(procedes):
+        session_id = c.lastrowid
+        for i, (label, duration) in enumerate(procedes):
             c.execute(
-                """
-                INSERT INTO procedes (session_id, position, label, duration)
-                VALUES (?, ?, ?, ?)
-                """,
-                (session_id, pos, label, int(duration)),
+                "INSERT INTO procedes (session_id, label, duration, ordre) VALUES (?, ?, ?, ?)",
+                (session_id, label, duration, i),
             )
     return session_id
 
 
-def update_session(
-    *,
-    session_id: int,
-    title: str,
-    description: str,
-    j_relative: str,
-    date: str,
-    time: str,
-    procedes: Iterable[tuple[str, int]],
-) -> None:
-    with get_conn() as c:
+def update_session(session_id, title, description, j_relative, date, time, procedes):
+    with get_conn() as conn:
+        c = conn.cursor()
         c.execute(
             """
             UPDATE sessions
-            SET title = ?, description = ?, j_relative = ?, date = ?, time = ?
-            WHERE id = ?
+               SET title=?, description=?, j_relative=?, date=?, time=?
+             WHERE id=?
             """,
             (title, description, j_relative, date, time, session_id),
         )
         c.execute("DELETE FROM procedes WHERE session_id = ?", (session_id,))
-        for pos, (label, duration) in enumerate(procedes):
+        for i, (label, duration) in enumerate(procedes):
             c.execute(
-                """
-                INSERT INTO procedes (session_id, position, label, duration)
-                VALUES (?, ?, ?, ?)
-                """,
-                (session_id, pos, label, int(duration)),
+                "INSERT INTO procedes (session_id, label, duration, ordre) VALUES (?, ?, ?, ?)",
+                (session_id, label, duration, i),
             )
 
 
 def delete_session(session_id: int) -> None:
-    # Supprime aussi les PDFs sur le disque (FK ON DELETE CASCADE
-    # retire les lignes, mais les fichiers restent).
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT path FROM session_pdfs WHERE session_id = ?", (session_id,)
+    for pdf in list_pdfs(session_id):
+        try:
+            os.remove(pdf["path"])
+        except OSError:
+            pass
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
+def list_sessions() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sessions ORDER BY date ASC, time ASC"
         ).fetchall()
-        for r in rows:
-            try:
-                os.remove(r["path"])
-            except OSError:
-                pass
-        c.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------------
-# Procédés
-# ---------------------------------------------------------------------------
+def get_session(session_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
 
 def list_procedes(session_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT * FROM procedes WHERE session_id = ? ORDER BY position, id",
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM procedes WHERE session_id = ? ORDER BY ordre ASC",
             (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_sessions_for_player(player_id: int) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.*
+              FROM sessions s
+              JOIN convocations c ON c.session_id = s.id
+             WHERE c.player_id = ?
+             ORDER BY s.date ASC, s.time ASC
+            """,
+            (player_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -298,46 +324,73 @@ def list_procedes(session_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def convoquer_joueurs(session_id: int, player_ids: Iterable[int]) -> None:
-    player_ids = list(player_ids)
-    with get_conn() as c:
-        c.execute("DELETE FROM convocations WHERE session_id = ?", (session_id,))
-        for pid in player_ids:
+    """Synchronise la liste des joueurs convoqués avec `player_ids`.
+
+    - Supprime les convocations qui ne sont plus dans la liste.
+    - Ajoute celles qui manquent (statut par défaut 'convoque').
+    - Ne touche pas au statut des joueurs déjà convoqués (ON CONFLICT DO NOTHING).
+    """
+    ids = list(player_ids)
+    with get_conn() as conn:
+        c = conn.cursor()
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            c.execute(
+                f"DELETE FROM convocations "
+                f"WHERE session_id = ? AND player_id NOT IN ({placeholders})",
+                (session_id, *ids),
+            )
+        else:
+            # Liste vide → on vide la table pour cette séance.
+            # (l'ancienne version faisait NOT IN (NULL) → toujours faux,
+            # donc aucun joueur n'était supprimé.)
+            c.execute(
+                "DELETE FROM convocations WHERE session_id = ?",
+                (session_id,),
+            )
+        for pid in ids:
             c.execute(
                 """
                 INSERT INTO convocations (session_id, player_id, status)
                 VALUES (?, ?, 'convoque')
+                ON CONFLICT(session_id, player_id) DO NOTHING
                 """,
                 (session_id, pid),
             )
 
 
+def remove_convocation(convocation_id: int) -> None:
+    """Retire directement une convocation (bouton 🗑️ par ligne)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM convocations WHERE id = ?", (convocation_id,))
+
+
 def list_convocations(session_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
+    with get_conn() as conn:
+        rows = conn.execute(
             """
-            SELECT c.id, c.player_id, c.status,
-                   u.username, u.full_name
-            FROM convocations c
-            JOIN users u ON u.id = c.player_id
-            WHERE c.session_id = ?
-            ORDER BY u.full_name
+            SELECT c.id, c.status, u.id AS player_id, u.full_name, u.username
+              FROM convocations c
+              JOIN users u ON u.id = c.player_id
+             WHERE c.session_id = ?
+             ORDER BY u.full_name
             """,
             (session_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def update_convocation_status(conv_id: int, status: str) -> None:
-    with get_conn() as c:
-        c.execute(
+def update_convocation_status(convocation_id: int, status: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
             "UPDATE convocations SET status = ? WHERE id = ?",
-            (status, conv_id),
+            (status, convocation_id),
         )
 
 
 def is_player_convoque(session_id: int, player_id: int) -> bool:
-    with get_conn() as c:
-        row = c.execute(
+    with get_conn() as conn:
+        row = conn.execute(
             "SELECT 1 FROM convocations WHERE session_id = ? AND player_id = ?",
             (session_id, player_id),
         ).fetchone()
@@ -348,160 +401,138 @@ def is_player_convoque(session_id: int, player_id: int) -> bool:
 # PDFs
 # ---------------------------------------------------------------------------
 
-def add_pdf(session_id: int, filename: str, data: bytes) -> int:
-    safe_name = filename.replace("/", "_").replace("\\", "_")
-    target = PDF_DIR / f"session_{session_id}_{safe_name}"
-    with open(target, "wb") as f:
-        f.write(data)
-
-    with get_conn() as c:
-        cur = c.execute(
-            """
-            INSERT INTO session_pdfs (session_id, filename, path)
-            VALUES (?, ?, ?)
-            """,
-            (session_id, filename, str(target)),
+def add_pdf(session_id: int, filename: str, content: bytes) -> None:
+    PDF_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = f"session_{session_id}_{filename}"
+    path = PDF_DIR / safe_name
+    with open(path, "wb") as f:
+        f.write(content)
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO pdfs (session_id, filename, path) VALUES (?, ?, ?)",
+            (session_id, filename, str(path)),
         )
-        return cur.lastrowid
 
 
 def list_pdfs(session_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT * FROM session_pdfs WHERE session_id = ? ORDER BY id",
-            (session_id,),
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pdfs WHERE session_id = ?", (session_id,)
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def delete_pdf(pdf_id: int) -> None:
-    with get_conn() as c:
-        row = c.execute(
-            "SELECT path FROM session_pdfs WHERE id = ?", (pdf_id,)
-        ).fetchone()
-        if row is not None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT path FROM pdfs WHERE id = ?", (pdf_id,)).fetchone()
+        if row:
             try:
                 os.remove(row["path"])
             except OSError:
                 pass
-        c.execute("DELETE FROM session_pdfs WHERE id = ?", (pdf_id,))
+        conn.execute("DELETE FROM pdfs WHERE id = ?", (pdf_id,))
 
 
 # ---------------------------------------------------------------------------
 # Questionnaires
 # ---------------------------------------------------------------------------
 
-def get_questionnaire_by_session(session_id: int) -> dict | None:
-    with get_conn() as c:
-        row = c.execute(
+def create_questionnaire(session_id: int, title: str, questions: Iterable[str]) -> int:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO questionnaires (session_id, title) VALUES (?, ?)",
+            (session_id, title),
+        )
+        qid = c.lastrowid
+        for i, qtext in enumerate(questions):
+            c.execute(
+                "INSERT INTO questions (questionnaire_id, text, ordre) VALUES (?, ?, ?)",
+                (qid, qtext, i),
+            )
+    return qid
+
+
+def update_questionnaire(questionnaire_id: int, title: str, questions: Iterable[str]) -> None:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "UPDATE questionnaires SET title = ? WHERE id = ?",
+            (title, questionnaire_id),
+        )
+        c.execute("DELETE FROM questions WHERE questionnaire_id = ?", (questionnaire_id,))
+        for i, qtext in enumerate(questions):
+            c.execute(
+                "INSERT INTO questions (questionnaire_id, text, ordre) VALUES (?, ?, ?)",
+                (questionnaire_id, qtext, i),
+            )
+
+
+def delete_questionnaire(questionnaire_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM questionnaires WHERE id = ?", (questionnaire_id,))
+
+
+def get_questionnaire_by_session(session_id: int):
+    with get_conn() as conn:
+        row = conn.execute(
             "SELECT * FROM questionnaires WHERE session_id = ?", (session_id,)
         ).fetchone()
     return dict(row) if row else None
 
 
-def create_questionnaire(session_id: int, title: str, questions: list[str]) -> int:
-    with get_conn() as c:
-        cur = c.execute(
-            "INSERT INTO questionnaires (session_id, title) VALUES (?, ?)",
-            (session_id, title),
-        )
-        quest_id = cur.lastrowid
-        for pos, text in enumerate(questions):
-            c.execute(
-                """
-                INSERT INTO questions (questionnaire_id, position, text)
-                VALUES (?, ?, ?)
-                """,
-                (quest_id, pos, text),
-            )
-    return quest_id
-
-
-def update_questionnaire(quest_id: int, title: str, questions: list[str]) -> None:
-    """Met à jour titre + questions. Supprime les anciennes questions (et donc
-    les réponses associées, via ON DELETE CASCADE)."""
-    with get_conn() as c:
-        c.execute(
-            "UPDATE questionnaires SET title = ? WHERE id = ?",
-            (title, quest_id),
-        )
-        c.execute(
-            "DELETE FROM questions WHERE questionnaire_id = ?", (quest_id,)
-        )
-        for pos, text in enumerate(questions):
-            c.execute(
-                """
-                INSERT INTO questions (questionnaire_id, position, text)
-                VALUES (?, ?, ?)
-                """,
-                (quest_id, pos, text),
-            )
-
-
-def delete_questionnaire(quest_id: int) -> None:
-    with get_conn() as c:
-        c.execute("DELETE FROM questionnaires WHERE id = ?", (quest_id,))
-
-
-def list_questions(quest_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
-            """
-            SELECT * FROM questions
-            WHERE questionnaire_id = ?
-            ORDER BY position, id
-            """,
-            (quest_id,),
+def list_questions(questionnaire_id: int) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM questions WHERE questionnaire_id = ? ORDER BY ordre ASC",
+            (questionnaire_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------------
-# Réponses
-# ---------------------------------------------------------------------------
+def save_responses(player_id: int, answers: dict[int, int]) -> None:
+    with get_conn() as conn:
+        c = conn.cursor()
+        for qid, val in answers.items():
+            c.execute(
+                """
+                INSERT INTO responses (question_id, player_id, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(question_id, player_id) DO UPDATE SET
+                    value = excluded.value
+                """,
+                (qid, player_id, val),
+            )
 
-def list_responses(quest_id: int) -> list[dict]:
-    with get_conn() as c:
-        rows = c.execute(
+
+def has_player_answered(questionnaire_id: int, player_id: int) -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
             """
-            SELECT r.value,
-                   q.text AS question_text,
-                   u.full_name AS player_name
-            FROM responses r
-            JOIN questions q ON q.id = r.question_id
-            JOIN users     u ON u.id = r.player_id
-            WHERE q.questionnaire_id = ?
-            ORDER BY u.full_name, q.position
+            SELECT 1
+              FROM responses r
+              JOIN questions q ON q.id = r.question_id
+             WHERE q.questionnaire_id = ? AND r.player_id = ?
+             LIMIT 1
             """,
-            (quest_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def has_player_answered(quest_id: int, player_id: int) -> bool:
-    with get_conn() as c:
-        row = c.execute(
-            """
-            SELECT 1 FROM responses r
-            JOIN questions q ON q.id = r.question_id
-            WHERE q.questionnaire_id = ? AND r.player_id = ?
-            LIMIT 1
-            """,
-            (quest_id, player_id),
+            (questionnaire_id, player_id),
         ).fetchone()
     return row is not None
 
 
-def save_responses(player_id: int, answers: dict[int, int]) -> None:
-    """answers : {question_id: value}. Remplace les réponses existantes."""
-    with get_conn() as c:
-        for qid, value in answers.items():
-            c.execute(
-                """
-                INSERT INTO responses (player_id, question_id, value)
-                VALUES (?, ?, ?)
-                ON CONFLICT(player_id, question_id) DO UPDATE SET
-                    value = excluded.value
-                """,
-                (player_id, int(qid), int(value)),
-            )
+def list_responses(questionnaire_id: int) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.value,
+                   q.text AS question_text,
+                   u.full_name AS player_name
+              FROM responses r
+              JOIN questions q ON q.id = r.question_id
+              JOIN users u ON u.id = r.player_id
+             WHERE q.questionnaire_id = ?
+             ORDER BY u.full_name, q.ordre
+            """,
+            (questionnaire_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
