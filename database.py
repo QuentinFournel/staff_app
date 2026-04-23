@@ -324,12 +324,7 @@ def list_sessions_for_player(player_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def convoquer_joueurs(session_id: int, player_ids: Iterable[int]) -> None:
-    """Synchronise la liste des joueurs convoqués avec `player_ids`.
-
-    - Supprime les convocations qui ne sont plus dans la liste.
-    - Ajoute celles qui manquent (statut par défaut 'convoque').
-    - Ne touche pas au statut des joueurs déjà convoqués (ON CONFLICT DO NOTHING).
-    """
+    """Synchronise la liste des joueurs convoqués avec `player_ids`."""
     ids = list(player_ids)
     with get_conn() as conn:
         c = conn.cursor()

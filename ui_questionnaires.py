@@ -1,13 +1,13 @@
 """
 ui_questionnaires.py
 --------------------
-- Côté joueur : liste des questionnaires à remplir (slider 0-100 aveugle).
-- Côté staff : UNIQUEMENT la vue "Résultats consolidés" (création/gestion
-  se fait désormais dans les onglets de la séance — cf. ui_sessions.py).
+- Formulaire de remplissage joueur (appelé depuis la page Séance côté joueur).
+- Vue staff des résultats consolidés (utilisée depuis l'onglet Questionnaire
+  de chaque séance, via render_questionnaire_results).
 """
 
-import pandas as pd
 import streamlit as st
+import pandas as pd
 
 import database as db
 
@@ -29,39 +29,11 @@ div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"] {
 
 
 # =============================================================================
-# VUE STAFF — Résultats consolidés
+# VUE STAFF — Résultats consolidés (affiché dans l'onglet Questionnaire)
 # =============================================================================
 
-def render_staff_results() -> None:
-    st.header("📊 Résultats des questionnaires")
-    st.caption(
-        "Vue d'ensemble pour comparer rapidement les réponses. "
-        "La création et la modification des questionnaires se font désormais "
-        "dans l'onglet 📝 Questionnaire de chaque séance."
-    )
-
-    sessions = db.list_sessions()
-    sessions_avec_quest = [
-        s for s in sessions if db.get_questionnaire_by_session(s["id"]) is not None
-    ]
-    if not sessions_avec_quest:
-        st.info("Aucun questionnaire créé pour le moment.")
-        return
-
-    options = {
-        f"{s['date']} {s['time']} — {s['title']}": s["id"]
-        for s in sessions_avec_quest
-    }
-    choix = st.selectbox("Séance à consulter", list(options.keys()))
-    session_id = options[choix]
-    quest = db.get_questionnaire_by_session(session_id)
-
-    render_questionnaire_results(quest)
-
-
 def render_questionnaire_results(quest: dict) -> None:
-    """Affiche le tableau + pivots d'un questionnaire donné.
-    Utilisé depuis la page de résultats ET depuis l'onglet séance."""
+    """Affiche le tableau + pivots d'un questionnaire donné."""
     st.markdown(f"### {quest['title']}")
     responses = db.list_responses(quest["id"])
     if not responses:
@@ -90,43 +62,17 @@ def render_questionnaire_results(quest: dict) -> None:
 
 
 # =============================================================================
-# VUE JOUEUR
+# VUE JOUEUR — Formulaire de remplissage
 # =============================================================================
 
-def render_player_questionnaires() -> None:
-    st.header("📝 Mes questionnaires")
-    user = st.session_state["user"]
-
-    sessions = db.list_sessions_for_player(user["id"])
-    sessions_with_q = []
-    for s in sessions:
-        q = db.get_questionnaire_by_session(s["id"])
-        if q is not None:
-            sessions_with_q.append((s, q))
-
-    if not sessions_with_q:
-        st.info("Aucun questionnaire disponible pour tes séances.")
-        return
-
-    def label(s, q):
-        deja = db.has_player_answered(q["id"], user["id"])
-        flag = "✅ " if deja else "🟠 "
-        return f"{flag}{s['date']} {s['time']} — {s['title']}"
-
-    labels = [label(s, q) for s, q in sessions_with_q]
-    idx = st.selectbox(
-        "Choisis un questionnaire",
-        options=range(len(labels)),
-        format_func=lambda i: labels[i],
-    )
-    session, quest = sessions_with_q[idx]
-
-    _player_fill_questionnaire(session, quest, user["id"])
-
-
-def _player_fill_questionnaire(session, quest, player_id: int) -> None:
-    st.markdown(f"### {quest['title']}")
-    st.caption(f"Séance : {session['title']} ({session['date']} {session['time']})")
+def render_player_fill_questionnaire(
+    quest: dict,
+    player_id: int,
+    show_title: bool = True,
+) -> None:
+    """Formulaire slider 0-100 aveugle. Appelable depuis la page Séance joueur."""
+    if show_title:
+        st.markdown(f"### {quest['title']}")
 
     questions = db.list_questions(quest["id"])
     if not questions:
@@ -175,7 +121,7 @@ def _player_fill_questionnaire(session, quest, player_id: int) -> None:
             answers[q["id"]] = int(value)
             st.markdown("")
 
-        if st.form_submit_button("Envoyer mes réponses"):
+        if st.form_submit_button("Envoyer mes réponses", use_container_width=True):
             db.save_responses(player_id, answers)
             st.success("Merci, tes réponses ont été enregistrées ✅")
             st.balloons()
