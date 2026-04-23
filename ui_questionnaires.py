@@ -29,7 +29,39 @@ div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"] {
 
 
 # =============================================================================
-# VUE STAFF — Résultats consolidés (affiché dans l'onglet Questionnaire)
+# VUE STAFF — Page "Résultats questionnaires" (vue d'ensemble)
+# =============================================================================
+
+def render_staff_results() -> None:
+    """Page globale staff : sélecteur de séance + résultats consolidés."""
+    st.header("📊 Résultats des questionnaires")
+    st.caption(
+        "Vue d'ensemble pour comparer rapidement les réponses. "
+        "La création et la modification des questionnaires se font "
+        "dans l'onglet 📝 Questionnaire de chaque séance."
+    )
+
+    sessions = db.list_sessions()
+    sessions_avec_quest = [
+        s for s in sessions if db.get_questionnaire_by_session(s["id"]) is not None
+    ]
+    if not sessions_avec_quest:
+        st.info("Aucun questionnaire créé pour le moment.")
+        return
+
+    options = {
+        f"{s['date']} {s['time']} — {s['title']}": s["id"]
+        for s in sessions_avec_quest
+    }
+    choix = st.selectbox("Séance à consulter", list(options.keys()))
+    session_id = options[choix]
+    quest = db.get_questionnaire_by_session(session_id)
+
+    render_questionnaire_results(quest)
+
+
+# =============================================================================
+# VUE STAFF — Résultats consolidés (affiché aussi dans l'onglet Questionnaire)
 # =============================================================================
 
 def render_questionnaire_results(quest: dict) -> None:
