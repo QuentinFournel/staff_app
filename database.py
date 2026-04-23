@@ -105,10 +105,6 @@ EXPECTED_COLUMNS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Initialisation
-# ---------------------------------------------------------------------------
-
 def init_db() -> None:
     with get_conn() as conn:
         c = conn.cursor()
@@ -235,15 +231,7 @@ def list_players() -> list[dict]:
 # Séances
 # ---------------------------------------------------------------------------
 
-def create_session(
-    title: str,
-    description: str,
-    j_relative: str,
-    date: str,
-    time: str,
-    created_by: int,
-    procedes: Iterable[tuple[str, int]] = (),
-) -> int:
+def create_session(title, description, j_relative, date, time, created_by, procedes=()):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute(
@@ -262,15 +250,7 @@ def create_session(
     return session_id
 
 
-def update_session(
-    session_id: int,
-    title: str,
-    description: str,
-    j_relative: str,
-    date: str,
-    time: str,
-    procedes: Iterable[tuple[str, int]],
-) -> None:
+def update_session(session_id, title, description, j_relative, date, time, procedes):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute(
@@ -452,7 +432,6 @@ def create_questionnaire(session_id: int, title: str, questions: Iterable[str]) 
 
 
 def update_questionnaire(questionnaire_id: int, title: str, questions: Iterable[str]) -> None:
-    """Met à jour le titre et remplace complètement la liste des questions."""
     with get_conn() as conn:
         c = conn.cursor()
         c.execute(
@@ -468,7 +447,6 @@ def update_questionnaire(questionnaire_id: int, title: str, questions: Iterable[
 
 
 def delete_questionnaire(questionnaire_id: int) -> None:
-    """Supprime un questionnaire et toutes ses questions/réponses (cascade)."""
     with get_conn() as conn:
         conn.execute("DELETE FROM questionnaires WHERE id = ?", (questionnaire_id,))
 
