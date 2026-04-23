@@ -112,31 +112,43 @@ def _session_to_event(s: dict) -> dict:
 
 
 def _handle_calendar_click(cal_result, state_key: str) -> None:
+    """Applique le clic calendrier à l'état, en ignorant le cal_result « en cache ».
+
+    streamlit_calendar renvoie, au rerun suivant un close, le même eventClick
+    qu'avant (cache interne du composant). Pour éviter que la séance qu'on vient
+    de fermer se ré-ouvre toute seule, on consomme un flag « skip_next » posé
+    par `_close_selected`. Plus besoin de re-monter le composant (= plus de flash).
+    """
+    skip_key = f"{state_key}_skip_next"
+    if st.session_state.pop(skip_key, False):
+        return
+
     if not cal_result:
         return
-    cb = cal_result.get("callback")
-    if cb == "eventClick":
-        event = cal_result.get("eventClick", {}).get("event", {})
-        event_id = event.get("id")
-        if event_id is not None:
-            try:
-                sid = int(event_id)
-            except (TypeError, ValueError):
-                return
-            if st.session_state.get(state_key) != sid:
-                st.session_state[state_key] = sid
-                st.rerun()
+    if cal_result.get("callback") != "eventClick":
+        return
+    event = cal_result.get("eventClick", {}).get("event", {})
+    event_id = event.get("id")
+    if event_id is None:
+        return
+    try:
+        sid = int(event_id)
+    except (TypeError, ValueError):
+        return
+
+    if st.session_state.get(state_key) != sid:
+        st.session_state[state_key] = sid
+        st.rerun()
 
 
-def _close_selected(state_key: str, cal_version_key: str) -> None:
-    """Ferme la séance ouverte et force le calendrier à se re-monter.
+def _close_selected(state_key: str) -> None:
+    """Ferme la séance ouverte sans re-monter le composant calendar.
 
-    Sans bump de version, streamlit-calendar renvoie au rerun suivant le
-    même eventClick en cache → la séance se ré-ouvre immédiatement.
-    Versionner la `key` du composant force un re-mount propre.
+    Le flag `skip_next` fait que la prochaine lecture de cal_result (forcément
+    celle qui contient le clic en cache juste avant le close) sera ignorée.
     """
     st.session_state.pop(state_key, None)
-    st.session_state[cal_version_key] = st.session_state.get(cal_version_key, 0) + 1
+    st.session_state[f"{state_key}_skip_next"] = True
     st.rerun()
 
 
@@ -243,12 +255,11 @@ def _staff_calendar_and_details() -> None:
     events = [_session_to_event(s) for s in sessions]
     st.caption("Clique sur une séance dans le calendrier pour afficher et gérer ses détails en dessous.")
 
-    cal_version = st.session_state.get("cal_staff_version", 0)
     cal_result = calendar(
         events=events,
         options=CALENDAR_OPTIONS,
         custom_css=CALENDAR_CSS,
-        key=f"cal_staff_{cal_version}",
+        key="cal_staff",
     )
     _handle_calendar_click(cal_result, "staff_selected_session")
 
@@ -269,7 +280,7 @@ def _staff_calendar_and_details() -> None:
         st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_details", use_container_width=True):
-            _close_selected("staff_selected_session", "cal_staff_version")
+            _close_selected("staff_selected_session")
 
     _staff_session_editor(session)
 
@@ -337,47 +348,7 @@ def _staff_session_editor(session: dict) -> None:
 
     # --- Convocations ---
     with tab_conv:
-        players = db.list_players()
-        current_convs = db.list_convocations(session_id)
-        current_ids = {c["player_id"] for c in current_convs}
-
-        st.markdown("**Liste des joueurs convoqués**")
-        player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
-        default_labels = [l for l, pid in player_labels.items() if pid in current_ids]
-
-        with st.form(f"conv_form_{session_id}"):
-            new_selection = st.multiselect(
-                "Joueurs convoqués",
-                list(player_labels.keys()),
-                default=default_labels,
-            )
-            if st.form_submit_button("Mettre à jour les convocations"):
-                db.convoquer_joueurs(session_id, [player_labels[l] for l in new_selection])
-                st.success("Convocations mises à jour ✅")
-                time.sleep(0.6)
-                st.rerun()
-
-        st.markdown("**Statuts**")
-        convs = db.list_convocations(session_id)
-        if not convs:
-            st.info("Aucun joueur convoqué.")
-        else:
-            status_options = ["convoque", "present", "absent", "malade", "adapte"]
-            for c in convs:
-                cols = st.columns([4, 3])
-                with cols[0]:
-                    st.markdown(f"**{c['full_name']}** _({c['username']})_")
-                with cols[1]:
-                    new_status = st.selectbox(
-                        "Statut",
-                        status_options,
-                        index=status_options.index(c["status"]),
-                        key=f"status_{c['id']}",
-                        label_visibility="collapsed",
-                    )
-                    if new_status != c["status"]:
-                        db.update_convocation_status(c["id"], new_status)
-                        st.rerun()
+        _convocations_block(session_id)
 
     # --- PDF ---
     with tab_pdf:
@@ -440,12 +411,76 @@ def _staff_session_editor(session: dict) -> None:
         ):
             db.delete_session(session_id)
             st.session_state.pop("staff_selected_session", None)
-            st.session_state["cal_staff_version"] = (
-                st.session_state.get("cal_staff_version", 0) + 1
-            )
+            st.session_state["staff_selected_session_skip_next"] = True
             st.success("Séance supprimée.")
             time.sleep(0.6)
             st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Onglet Convocations
+# ---------------------------------------------------------------------------
+
+def _convocations_block(session_id: int) -> None:
+    players = db.list_players()
+    convs = db.list_convocations(session_id)
+    current_ids = {c["player_id"] for c in convs}
+
+    st.markdown("**Joueurs convoqués**")
+    player_labels = {f"{p['full_name']} ({p['username']})": p["id"] for p in players}
+    default_labels = [l for l, pid in player_labels.items() if pid in current_ids]
+
+    # La key du multiselect dépend de l'état courant → forcer le composant
+    # à se resynchroniser après une màj (évite les cas où la liste ne reflète
+    # plus ce qu'on vient d'enregistrer).
+    ms_key = f"conv_ms_{session_id}_{len(current_ids)}_{sum(current_ids)}"
+
+    with st.form(f"conv_form_{session_id}"):
+        new_selection = st.multiselect(
+            "Sélection",
+            list(player_labels.keys()),
+            default=default_labels,
+            key=ms_key,
+            label_visibility="collapsed",
+        )
+        if st.form_submit_button("Mettre à jour les convocations"):
+            db.convoquer_joueurs(
+                session_id, [player_labels[l] for l in new_selection]
+            )
+            st.success("Convocations mises à jour ✅")
+            time.sleep(0.4)
+            st.rerun()
+
+    st.markdown("**Statuts**")
+    if not convs:
+        st.info("Aucun joueur convoqué.")
+        return
+
+    status_options = ["convoque", "present", "absent", "malade", "adapte"]
+    for c in convs:
+        cols = st.columns([4, 3, 1])
+        with cols[0]:
+            st.markdown(f"**{c['full_name']}** _({c['username']})_")
+        with cols[1]:
+            new_status = st.selectbox(
+                "Statut",
+                status_options,
+                index=status_options.index(c["status"]),
+                key=f"status_{c['id']}",
+                label_visibility="collapsed",
+            )
+            if new_status != c["status"]:
+                db.update_convocation_status(c["id"], new_status)
+                st.rerun()
+        with cols[2]:
+            if st.button(
+                "🗑️",
+                key=f"rm_conv_{c['id']}",
+                help="Retirer ce joueur de la convocation",
+                use_container_width=True,
+            ):
+                db.remove_convocation(c["id"])
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -508,8 +543,6 @@ def _staff_create_questionnaire_for_session(session_id: int) -> None:
 
 def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
     # Segmented control → évite les tabs-dans-tabs.
-    # Utilise st.segmented_control s'il est dispo (streamlit >= 1.39),
-    # sinon fallback sur un st.radio horizontal stylé en pill-group.
     views = ["✏️ Éditer", "📊 Résultats", "🗑️ Supprimer"]
     view_key = f"quest_view_{quest['id']}"
 
@@ -530,13 +563,6 @@ def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
             horizontal=True,
             label_visibility="collapsed",
             key=view_key,
-        )
-        # Petit marqueur pour que le CSS cible uniquement ce radio.
-        st.markdown(
-            "<script>document.querySelectorAll('div[data-testid=\"stRadio\"]')."
-            "forEach(el => { if (!el.dataset.segmented) el.dataset.segmented = '1'; });"
-            "</script>",
-            unsafe_allow_html=True,
         )
 
     if view is None:
@@ -626,12 +652,11 @@ def render_player_sessions() -> None:
     events = [_session_to_event(s) for s in sessions]
     st.caption("Clique sur une séance pour afficher ses détails.")
 
-    cal_version = st.session_state.get("cal_player_version", 0)
     cal_result = calendar(
         events=events,
         options=CALENDAR_OPTIONS,
         custom_css=CALENDAR_CSS,
-        key=f"cal_player_{cal_version}",
+        key="cal_player",
     )
     _handle_calendar_click(cal_result, "player_selected_session")
 
@@ -660,7 +685,7 @@ def render_player_sessions() -> None:
         st.caption(f"{session['date']} à {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
-            _close_selected("player_selected_session", "cal_player_version")
+            _close_selected("player_selected_session")
 
     if session.get("description"):
         st.markdown(session["description"])

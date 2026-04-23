@@ -17,17 +17,60 @@ def _load_users_from_secrets() -> dict:
     return {name: dict(data) for name, data in users.items()}
 
 
-def login_form() -> None:
-    st.title("⚽ Connexion")
-    st.markdown(
-        "Bienvenue sur l'outil de gestion des séances et questionnaires du club. "
-        "Connecte-toi avec les identifiants qui t'ont été transmis par le staff."
-    )
+LOGIN_CSS = """
+<style>
+.login-logo {
+    text-align: center;
+    margin: 8px 0 6px 0;
+}
+.login-logo img {
+    max-width: 140px;
+    height: auto;
+}
+.login-club {
+    text-align: center;
+    font-weight: 700;
+    font-size: 1.4rem;
+    letter-spacing: 1px;
+    margin: 6px 0 0 0;
+}
+.login-sub {
+    text-align: center;
+    font-size: 0.9rem;
+    color: rgba(120, 120, 120, 0.9);
+    margin-bottom: 18px;
+}
+</style>
+"""
 
-    with st.form("login_form"):
-        username = st.text_input("Nom d'utilisateur").strip().lower()
-        password = st.text_input("Mot de passe", type="password")
-        submitted = st.form_submit_button("Se connecter")
+
+def login_form(logo_url: str | None = None) -> None:
+    st.markdown(LOGIN_CSS, unsafe_allow_html=True)
+
+    # Header centré dans une colonne étroite pour que le form fasse pro
+    _, col, _ = st.columns([1, 2, 1])
+
+    with col:
+        if logo_url:
+            st.markdown(
+                f'<div class="login-logo"><img src="{logo_url}" alt="AS Cannes"/></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div class="login-club">AS CANNES</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="login-sub">Séances & Questionnaires</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            "Bienvenue sur l'outil de gestion des séances et questionnaires du club. "
+            "Connecte-toi avec les identifiants transmis par le staff."
+        )
+
+        with st.form("login_form"):
+            username = st.text_input("Nom d'utilisateur").strip().lower()
+            password = st.text_input("Mot de passe", type="password")
+            submitted = st.form_submit_button("Se connecter", use_container_width=True)
 
     if not submitted:
         return

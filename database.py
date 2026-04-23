@@ -324,14 +324,30 @@ def list_sessions_for_player(player_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def convoquer_joueurs(session_id: int, player_ids: Iterable[int]) -> None:
+    """Synchronise la liste des joueurs convoqués avec `player_ids`.
+
+    - Supprime les convocations qui ne sont plus dans la liste.
+    - Ajoute celles qui manquent (statut par défaut 'convoque').
+    - Ne touche pas au statut des joueurs déjà convoqués (ON CONFLICT DO NOTHING).
+    """
     ids = list(player_ids)
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute(
-            "DELETE FROM convocations WHERE session_id = ? AND player_id NOT IN (%s)"
-            % (",".join("?" * len(ids)) if ids else "NULL"),
-            (session_id, *ids) if ids else (session_id,),
-        )
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            c.execute(
+                f"DELETE FROM convocations "
+                f"WHERE session_id = ? AND player_id NOT IN ({placeholders})",
+                (session_id, *ids),
+            )
+        else:
+            # Liste vide → on vide la table pour cette séance.
+            # (l'ancienne version faisait NOT IN (NULL) → toujours faux,
+            # donc aucun joueur n'était supprimé.)
+            c.execute(
+                "DELETE FROM convocations WHERE session_id = ?",
+                (session_id,),
+            )
         for pid in ids:
             c.execute(
                 """
@@ -341,6 +357,12 @@ def convoquer_joueurs(session_id: int, player_ids: Iterable[int]) -> None:
                 """,
                 (session_id, pid),
             )
+
+
+def remove_convocation(convocation_id: int) -> None:
+    """Retire directement une convocation (bouton 🗑️ par ligne)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM convocations WHERE id = ?", (convocation_id,))
 
 
 def list_convocations(session_id: int) -> list[dict]:
