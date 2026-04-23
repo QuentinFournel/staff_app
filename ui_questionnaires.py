@@ -2,8 +2,8 @@
 ui_questionnaires.py
 --------------------
 - Formulaire de remplissage joueur (appelé depuis la page Séance côté joueur).
-- Vue staff des résultats consolidés (utilisée depuis l'onglet Questionnaire
-  de chaque séance, via render_questionnaire_results).
+- Vue staff des résultats consolidés (page "Résultats questionnaires"
+  + onglet Résultats de chaque séance).
 """
 
 import streamlit as st
@@ -61,7 +61,7 @@ def render_staff_results() -> None:
 
 
 # =============================================================================
-# VUE STAFF — Résultats consolidés (affiché aussi dans l'onglet Questionnaire)
+# VUE STAFF — Résultats d'un questionnaire (utilisée aussi dans l'onglet Séance)
 # =============================================================================
 
 def render_questionnaire_results(quest: dict) -> None:
