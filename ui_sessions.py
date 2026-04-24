@@ -690,8 +690,6 @@ def render_player_sessions() -> None:
     st.markdown("---")
     header_cols = st.columns([6, 1])
     with header_cols[0]:
-        j = session.get("j_relative") or ""
-        flag = f"[{j}] " if j else ""
         st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
