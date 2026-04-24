@@ -692,7 +692,7 @@ def render_player_sessions() -> None:
     with header_cols[0]:
         j = session.get("j_relative") or ""
         flag = f"[{j}] " if j else ""
-        st.subheader(f"🗂️ {flag}{session['title']} — {session['date']} {session['time']}")
+        st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
             _close_selected("player_selected_session")
