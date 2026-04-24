@@ -1,9 +1,11 @@
 """
 ui_questionnaires.py
 --------------------
-- Côté joueur : liste des questionnaires à remplir (slider 0-100 aveugle).
-- Côté staff : UNIQUEMENT la vue "Résultats consolidés" (création/gestion
-  se fait désormais dans les onglets de la séance — cf. ui_sessions.py).
+- Côté joueur : formulaire de remplissage (slider 0-100 aveugle). Affiché
+  directement dans l'onglet Questionnaire de la séance sélectionnée,
+  exactement comme l'onglet Questionnaire côté staff.
+- Côté staff : vue "Résultats consolidés" d'un questionnaire (tableau +
+  pivots), utilisée dans l'onglet Résultats de chaque séance.
 """
 
 import pandas as pd
@@ -90,43 +92,22 @@ def render_questionnaire_results(quest: dict) -> None:
 
 
 # =============================================================================
-# VUE JOUEUR
+# VUE JOUEUR — Formulaire de remplissage
 # =============================================================================
 
-def render_player_questionnaires() -> None:
-    st.header("📝 Mes questionnaires")
-    user = st.session_state["user"]
+def render_player_fill_questionnaire(
+    quest: dict,
+    player_id: int,
+    show_title: bool = True,
+) -> None:
+    """Formulaire slider 0-100 aveugle.
 
-    sessions = db.list_sessions_for_player(user["id"])
-    sessions_with_q = []
-    for s in sessions:
-        q = db.get_questionnaire_by_session(s["id"])
-        if q is not None:
-            sessions_with_q.append((s, q))
-
-    if not sessions_with_q:
-        st.info("Aucun questionnaire disponible pour tes séances.")
-        return
-
-    def label(s, q):
-        deja = db.has_player_answered(q["id"], user["id"])
-        flag = "✅ " if deja else "🟠 "
-        return f"{flag}{s['date']} {s['time']} — {s['title']}"
-
-    labels = [label(s, q) for s, q in sessions_with_q]
-    idx = st.selectbox(
-        "Choisis un questionnaire",
-        options=range(len(labels)),
-        format_func=lambda i: labels[i],
-    )
-    session, quest = sessions_with_q[idx]
-
-    _player_fill_questionnaire(session, quest, user["id"])
-
-
-def _player_fill_questionnaire(session, quest, player_id: int) -> None:
-    st.markdown(f"### {quest['title']}")
-    st.caption(f"Séance : {session['title']} ({session['date']} {session['time']})")
+    Appelé depuis l'onglet Questionnaire de la page Séance (côté joueur).
+    La séance est déjà visible à l'écran, donc on n'affiche que le titre
+    du questionnaire et les curseurs.
+    """
+    if show_title:
+        st.markdown(f"### {quest['title']}")
 
     questions = db.list_questions(quest["id"])
     if not questions:

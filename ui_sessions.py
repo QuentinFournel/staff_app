@@ -18,7 +18,10 @@ import streamlit as st
 from streamlit_calendar import calendar
 
 import database as db
-from ui_questionnaires import render_questionnaire_results
+from ui_questionnaires import (
+    render_questionnaire_results,
+    render_player_fill_questionnaire,
+)
 
 
 COULEUR_J = {
@@ -640,7 +643,15 @@ def _quest_delete_block(quest: dict) -> None:
 # ===========================================================================
 
 def render_player_sessions() -> None:
-    st.header("📅 Mes séances")
+    """Vue joueur : même structure que le staff.
+
+    - Un header "📅 Séances (joueur)"
+    - Un calendrier des séances où le joueur est convoqué
+    - Au clic sur une séance, on ouvre un bloc détails avec des onglets
+      identiques visuellement à ceux du staff (Infos & procédés / PDF /
+      Questionnaire), adaptés en lecture seule pour le joueur.
+    """
+    st.header("📅 Séances (joueur)")
     user = st.session_state["user"]
 
     sessions = db.list_sessions_for_player(user["id"])
@@ -650,7 +661,7 @@ def render_player_sessions() -> None:
         return
 
     events = [_session_to_event(s) for s in sessions]
-    st.caption("Clique sur une séance pour afficher ses détails.")
+    st.caption("Clique sur une séance dans le calendrier pour afficher ses détails en dessous.")
 
     cal_result = calendar(
         events=events,
@@ -662,7 +673,7 @@ def render_player_sessions() -> None:
 
     selected_id = st.session_state.get("player_selected_session")
     if selected_id is None:
-        st.info("👉 Sélectionne une séance dans le calendrier pour voir les détails.")
+        st.info("👉 Sélectionne une séance dans le calendrier pour voir ses détails.")
         return
 
     if not db.is_player_convoque(selected_id, user["id"]):
@@ -681,35 +692,67 @@ def render_player_sessions() -> None:
     with header_cols[0]:
         j = session.get("j_relative") or ""
         flag = f"[{j}] " if j else ""
-        st.subheader(f"🗂️ {flag}{session['title']}")
-        st.caption(f"{session['date']} à {session['time']}")
+        st.subheader(f"🗂️ {flag}{session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
             _close_selected("player_selected_session")
 
-    if session.get("description"):
-        st.markdown(session["description"])
+    _player_session_viewer(session, user["id"])
 
-    procedes = db.list_procedes(session["id"])
-    if procedes:
+
+def _player_session_viewer(session: dict, player_id: int) -> None:
+    """Détails d'une séance côté joueur, en onglets (même look que côté staff).
+
+    Onglets :
+        ℹ️ Infos & procédés : lecture seule (description + procédés)
+        📎 PDF              : téléchargement des documents joints
+        📝 Questionnaire    : formulaire de remplissage
+    """
+    tab_info, tab_pdf, tab_quest = st.tabs(
+        ["ℹ️ Infos & procédés", "📎 PDF", "📝 Questionnaire"]
+    )
+
+    # --- Infos & procédés (lecture seule) ---
+    with tab_info:
+        if session.get("description"):
+            st.markdown(session["description"])
+        else:
+            st.caption("Aucune description pour cette séance.")
+
+        procedes = db.list_procedes(session["id"])
         st.markdown("**Procédés :**")
-        df = pd.DataFrame(
-            [{"Procédé": p["label"], "Durée (min)": p["duration"]} for p in procedes]
-        )
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        if procedes:
+            df = pd.DataFrame(
+                [{"Procédé": p["label"], "Durée (min)": p["duration"]} for p in procedes]
+            )
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Aucun procédé renseigné.")
 
-    pdfs = db.list_pdfs(session["id"])
-    if pdfs:
-        st.markdown("**Documents :**")
-        for p in pdfs:
-            try:
-                with open(p["path"], "rb") as f:
-                    st.download_button(
-                        label=f"📄 {p['filename']}",
-                        data=f.read(),
-                        file_name=p["filename"],
-                        mime="application/pdf",
-                        key=f"player_dl_{p['id']}",
-                    )
-            except FileNotFoundError:
-                st.warning(f"Fichier manquant : {p['filename']}")
+    # --- PDF (téléchargement seulement) ---
+    with tab_pdf:
+        pdfs = db.list_pdfs(session["id"])
+        if not pdfs:
+            st.caption("Aucun document joint à cette séance.")
+        else:
+            for p in pdfs:
+                try:
+                    with open(p["path"], "rb") as f:
+                        st.download_button(
+                            label=f"📄 {p['filename']}",
+                            data=f.read(),
+                            file_name=p["filename"],
+                            mime="application/pdf",
+                            key=f"player_dl_{p['id']}",
+                            use_container_width=True,
+                        )
+                except FileNotFoundError:
+                    st.warning(f"Fichier manquant : {p['filename']}")
+
+    # --- Questionnaire (remplissage) ---
+    with tab_quest:
+        quest = db.get_questionnaire_by_session(session["id"])
+        if quest is None:
+            st.info("Aucun questionnaire n'a encore été créé pour cette séance.")
+        else:
+            render_player_fill_questionnaire(quest, player_id)

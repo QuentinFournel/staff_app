@@ -3,9 +3,9 @@ app.py
 ------
 Point d'entrée Streamlit.
 
-Sidebar : logo club, carte utilisateur, nav (côté joueur uniquement — côté
-staff tout tient sur la page Séances, le questionnaire vit dans l'onglet
-de la séance).
+Sidebar : logo club, carte utilisateur, logout.
+Staff comme joueur ont désormais la même structure visuelle — une seule
+page Séances, le questionnaire vit dans l'onglet de la séance.
 """
 
 import streamlit as st
@@ -13,7 +13,6 @@ import streamlit as st
 import database as db
 import auth
 from ui_sessions import render_staff_sessions, render_player_sessions
-from ui_questionnaires import render_player_questionnaires
 
 
 AS_CANNES_LOGO_URL = (
@@ -105,8 +104,8 @@ SIDEBAR_CSS = """
 """
 
 
-def _render_sidebar(user: dict) -> str | None:
-    """Sidebar : logo + carte user + nav (joueur) + logout. Retourne la page choisie."""
+def _render_sidebar(user: dict) -> None:
+    """Sidebar : logo + carte user + logout. Identique pour staff et joueur."""
     with st.sidebar:
         st.markdown(SIDEBAR_CSS, unsafe_allow_html=True)
 
@@ -135,20 +134,9 @@ def _render_sidebar(user: dict) -> str | None:
             unsafe_allow_html=True,
         )
 
-        page = None
-        if user["role"] == "joueur":
-            st.markdown("")
-            page = st.radio(
-                "Navigation",
-                ["📅 Mes séances", "📝 Mes questionnaires"],
-                label_visibility="collapsed",
-            )
-
         st.markdown("---")
         if st.button("Se déconnecter", use_container_width=True):
             auth.logout()
-
-    return page
 
 
 def main() -> None:
@@ -158,15 +146,12 @@ def main() -> None:
         auth.login_form(logo_url=AS_CANNES_LOGO_URL)
         return
 
-    page = _render_sidebar(user)
+    _render_sidebar(user)
 
     if user["role"] == "staff":
         render_staff_sessions()
     else:
-        if page == "📅 Mes séances":
-            render_player_sessions()
-        elif page == "📝 Mes questionnaires":
-            render_player_questionnaires()
+        render_player_sessions()
 
 
 if __name__ == "__main__":
