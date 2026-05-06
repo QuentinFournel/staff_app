@@ -459,7 +459,7 @@ def _convocations_block(session_id: int) -> None:
         st.info("Aucun joueur convoqué.")
         return
 
-    status_options = ["convoque", "present", "absent", "malade", "adapte"]
+    status_options = ["Convoqué", "Présent", "Blessé", "Malade", "Adapté", "Exempté", "Absent non justifié"]
     for c in convs:
         cols = st.columns([4, 3, 1])
         with cols[0]:
