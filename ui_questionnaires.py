@@ -35,11 +35,11 @@ div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"] {
 # =============================================================================
 
 def render_staff_results() -> None:
-    st.header("📊 Résultats des questionnaires")
+    st.header("Résultats des questionnaires")
     st.caption(
         "Vue d'ensemble pour comparer rapidement les réponses. "
         "La création et la modification des questionnaires se font désormais "
-        "dans l'onglet 📝 Questionnaire de chaque séance."
+        "dans l'onglet Questionnaire de chaque séance."
     )
 
     sessions = db.list_sessions()
@@ -158,5 +158,5 @@ def render_player_fill_questionnaire(
 
         if st.form_submit_button("Envoyer mes réponses"):
             db.save_responses(player_id, answers)
-            st.success("Merci, tes réponses ont été enregistrées ✅")
+            st.success("Merci, tes réponses ont été enregistrées.")
             st.balloons()

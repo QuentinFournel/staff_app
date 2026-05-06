@@ -160,9 +160,9 @@ def _close_selected(state_key: str) -> None:
 # ===========================================================================
 
 def render_staff_sessions() -> None:
-    st.header("📅 Séances (staff)")
+    st.header("Séances (staff)")
 
-    tab_cal, tab_new = st.tabs(["Calendrier", "➕ Créer une séance"])
+    tab_cal, tab_new = st.tabs(["Calendrier", "Créer une séance"])
 
     with tab_new:
         _staff_create_session()
@@ -240,7 +240,7 @@ def _staff_create_session() -> None:
     )
     db.convoquer_joueurs(session_id, [player_labels[l] for l in selected_labels])
 
-    st.success(f"Séance « {title} » créée ✅")
+    st.success(f"Séance « {title} » créée.")
     st.balloons()
     time.sleep(1.8)
     st.session_state["staff_selected_session"] = session_id
@@ -251,7 +251,7 @@ def _staff_calendar_and_details() -> None:
     sessions = db.list_sessions()
 
     if not sessions:
-        st.info("Aucune séance pour le moment. Crée-en une via l'onglet « ➕ Créer une séance ».")
+        st.info("Aucune séance pour le moment. Crée-en une via l'onglet « Créer une séance ».")
         st.session_state.pop("staff_selected_session", None)
         return
 
@@ -268,7 +268,7 @@ def _staff_calendar_and_details() -> None:
 
     selected_id = st.session_state.get("staff_selected_session")
     if selected_id is None:
-        st.info("👉 Sélectionne une séance dans le calendrier pour voir ses détails.")
+        st.info("Sélectionne une séance dans le calendrier pour voir ses détails.")
         return
 
     session = db.get_session(selected_id)
@@ -280,7 +280,7 @@ def _staff_calendar_and_details() -> None:
     st.markdown("---")
     header_cols = st.columns([6, 1])
     with header_cols[0]:
-        st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
+        st.subheader(f"{session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_details", use_container_width=True):
             _close_selected("staff_selected_session")
@@ -292,7 +292,7 @@ def _staff_session_editor(session: dict) -> None:
     session_id = session["id"]
 
     tab_info, tab_conv, tab_pdf, tab_quest, tab_danger = st.tabs(
-        ["✏️ Infos & procédés", "👥 Convocations", "📎 PDF", "📝 Questionnaire", "🗑️ Supprimer"]
+        ["Infos & procédés", "Convocations", "PDF", "Questionnaire", "Supprimer"]
     )
 
     # --- Infos & procédés ---
@@ -345,7 +345,7 @@ def _staff_session_editor(session: dict) -> None:
                     time=time_val.strftime("%H:%M"),
                     procedes=procedes,
                 )
-                st.success("Séance mise à jour ✅")
+                st.success("Séance mise à jour.")
                 time.sleep(0.8)
                 st.rerun()
 
@@ -364,7 +364,7 @@ def _staff_session_editor(session: dict) -> None:
                     try:
                         with open(p["path"], "rb") as f:
                             st.download_button(
-                                label=f"📄 {p['filename']}",
+                                label=f"{p['filename']}",
                                 data=f.read(),
                                 file_name=p["filename"],
                                 mime="application/pdf",
@@ -386,7 +386,7 @@ def _staff_session_editor(session: dict) -> None:
             if submitted_pdf:
                 if new_pdf is not None:
                     db.add_pdf(session_id, new_pdf.name, new_pdf.read())
-                    st.success("PDF ajouté ✅")
+                    st.success("PDF ajouté.")
                     time.sleep(0.6)
                     st.rerun()
                 else:
@@ -450,7 +450,7 @@ def _convocations_block(session_id: int) -> None:
             db.convoquer_joueurs(
                 session_id, [player_labels[l] for l in new_selection]
             )
-            st.success("Convocations mises à jour ✅")
+            st.success("Convocations mises à jour.")
             time.sleep(0.4)
             st.rerun()
 
@@ -538,7 +538,7 @@ def _staff_create_questionnaire_for_session(session_id: int) -> None:
     db.create_questionnaire(
         session_id, title.strip() or "Questionnaire", questions
     )
-    st.success("Questionnaire créé ✅")
+    st.success("Questionnaire créé.")
     st.balloons()
     time.sleep(1.5)
     st.rerun()
@@ -546,7 +546,7 @@ def _staff_create_questionnaire_for_session(session_id: int) -> None:
 
 def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
     # Segmented control → évite les tabs-dans-tabs.
-    views = ["✏️ Éditer", "📊 Résultats", "🗑️ Supprimer"]
+    views = ["Éditer", "Résultats", "Supprimer"]
     view_key = f"quest_view_{quest['id']}"
 
     seg_ctrl = getattr(st, "segmented_control", None)
@@ -573,11 +573,11 @@ def _staff_manage_questionnaire(session: dict, quest: dict) -> None:
 
     st.markdown("")  # petit espace vertical
 
-    if view == "✏️ Éditer":
+    if view == "Éditer":
         _quest_edit_block(quest)
-    elif view == "📊 Résultats":
+    elif view == "Résultats":
         render_questionnaire_results(quest)
-    elif view == "🗑️ Supprimer":
+    elif view == "Supprimer":
         _quest_delete_block(quest)
 
 
@@ -612,7 +612,7 @@ def _quest_edit_block(quest: dict) -> None:
                 db.update_questionnaire(
                     quest["id"], title.strip() or quest["title"], new_qs
                 )
-                st.success("Questionnaire mis à jour ✅")
+                st.success("Questionnaire mis à jour.")
                 time.sleep(0.8)
                 st.rerun()
 
@@ -645,13 +645,13 @@ def _quest_delete_block(quest: dict) -> None:
 def render_player_sessions() -> None:
     """Vue joueur : même structure que le staff.
 
-    - Un header "📅 Séances (joueur)"
+    - Un header "Séances (joueur)"
     - Un calendrier des séances où le joueur est convoqué
     - Au clic sur une séance, on ouvre un bloc détails avec des onglets
       identiques visuellement à ceux du staff (Infos & procédés / PDF /
       Questionnaire), adaptés en lecture seule pour le joueur.
     """
-    st.header("📅 Séances (joueur)")
+    st.header("Séances (joueur)")
     user = st.session_state["user"]
 
     sessions = db.list_sessions_for_player(user["id"])
@@ -673,7 +673,7 @@ def render_player_sessions() -> None:
 
     selected_id = st.session_state.get("player_selected_session")
     if selected_id is None:
-        st.info("👉 Sélectionne une séance dans le calendrier pour voir ses détails.")
+        st.info("Sélectionne une séance dans le calendrier pour voir ses détails.")
         return
 
     if not db.is_player_convoque(selected_id, user["id"]):
@@ -690,7 +690,7 @@ def render_player_sessions() -> None:
     st.markdown("---")
     header_cols = st.columns([6, 1])
     with header_cols[0]:
-        st.subheader(f"🗂️ {session['title']} — {session['date']} {session['time']}")
+        st.subheader(f"{session['title']} — {session['date']} {session['time']}")
     with header_cols[1]:
         if st.button("✖ Fermer", key="close_player_details", use_container_width=True):
             _close_selected("player_selected_session")
@@ -707,7 +707,7 @@ def _player_session_viewer(session: dict, player_id: int) -> None:
         📝 Questionnaire    : formulaire de remplissage
     """
     tab_info, tab_pdf, tab_quest = st.tabs(
-        ["ℹ️ Infos & procédés", "📎 PDF", "📝 Questionnaire"]
+        ["Infos & procédés", "PDF", "Questionnaire"]
     )
 
     # --- Infos & procédés (lecture seule) ---
@@ -737,7 +737,7 @@ def _player_session_viewer(session: dict, player_id: int) -> None:
                 try:
                     with open(p["path"], "rb") as f:
                         st.download_button(
-                            label=f"📄 {p['filename']}",
+                            label=f"{p['filename']}",
                             data=f.read(),
                             file_name=p["filename"],
                             mime="application/pdf",
