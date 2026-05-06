@@ -62,11 +62,6 @@ def login_form(logo_url: str | None = None) -> None:
             unsafe_allow_html=True,
         )
 
-        st.markdown(
-            "Bienvenue sur l'outil de gestion des séances et questionnaires du club. "
-            "Connecte-toi avec les identifiants transmis par le staff."
-        )
-
         with st.form("login_form"):
             username = st.text_input("Nom d'utilisateur").strip().lower()
             password = st.text_input("Mot de passe", type="password")
